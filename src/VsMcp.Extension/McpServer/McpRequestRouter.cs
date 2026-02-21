@@ -1,5 +1,8 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using VsMcp.Shared.Protocol;
 
@@ -115,8 +118,31 @@ namespace VsMcp.Extension.McpServer
 
             try
             {
-                var toolResult = await handler(args);
+                // Verify VS UI thread is responsive before executing tool
+                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    var timeoutResult = McpToolResult.Error("Visual Studio is not responding. The UI thread may be blocked by a modal dialog.");
+                    return JsonRpcResponse.Success(request.Id, timeoutResult);
+                }
+
+                // Run tool handler - it will switch to UI thread internally via RunOnUIThreadAsync
+                var toolResult = await Task.Run(() => handler(args));
                 return JsonRpcResponse.Success(request.Id, toolResult);
+            }
+            catch (COMException ex)
+            {
+                var errorResult = McpToolResult.Error($"Visual Studio connection lost: {ex.Message}");
+                return JsonRpcResponse.Success(request.Id, errorResult);
+            }
+            catch (InvalidComObjectException ex)
+            {
+                var errorResult = McpToolResult.Error($"Visual Studio instance is no longer available: {ex.Message}");
+                return JsonRpcResponse.Success(request.Id, errorResult);
             }
             catch (Exception ex)
             {
