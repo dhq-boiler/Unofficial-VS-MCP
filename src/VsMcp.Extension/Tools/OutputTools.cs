@@ -13,6 +13,14 @@ namespace VsMcp.Extension.Tools
 {
     public static class OutputTools
     {
+        // Map common English pane names to known localized names
+        private static readonly Dictionary<string, string[]> PaneAliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Build", new[] { "ビルド" } },
+            { "Debug", new[] { "デバッグ" } },
+            { "General", new[] { "全般" } },
+        };
+
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
             registry.Register(
@@ -44,6 +52,41 @@ namespace VsMcp.Extension.Tools
                 args => ErrorListGetAsync(accessor, args));
         }
 
+        private static OutputWindowPane FindPane(OutputWindow outputWindow, string paneName)
+        {
+            // Build list of names to match: the given name + any aliases
+            var namesToMatch = new List<string> { paneName };
+            if (PaneAliases.TryGetValue(paneName, out var aliases))
+            {
+                namesToMatch.AddRange(aliases);
+            }
+            // Also check reverse: if the user gave a localized name, try English keys
+            foreach (var kvp in PaneAliases)
+            {
+                foreach (var alias in kvp.Value)
+                {
+                    if (string.Equals(alias, paneName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        namesToMatch.Add(kvp.Key);
+                    }
+                }
+            }
+
+            foreach (OutputWindowPane p in outputWindow.OutputWindowPanes)
+            {
+                try
+                {
+                    foreach (var name in namesToMatch)
+                    {
+                        if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                            return p;
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+
         private static async Task<McpToolResult> OutputWriteAsync(VsServiceAccessor accessor, JObject args)
         {
             var text = args.Value<string>("text");
@@ -58,17 +101,7 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 var outputWindow = dte.ToolWindows.OutputWindow;
-                OutputWindowPane pane = null;
-
-                // Try to find existing pane
-                foreach (OutputWindowPane p in outputWindow.OutputWindowPanes)
-                {
-                    if (string.Equals(p.Name, paneName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        pane = p;
-                        break;
-                    }
-                }
+                var pane = FindPane(outputWindow, paneName);
 
                 // Create if not found
                 if (pane == null)
@@ -110,19 +143,11 @@ namespace VsMcp.Extension.Tools
                     });
                 }
 
-                // Find the pane
-                OutputWindowPane pane = null;
-                foreach (OutputWindowPane p in outputWindow.OutputWindowPanes)
-                {
-                    if (string.Equals(p.Name, paneName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        pane = p;
-                        break;
-                    }
-                }
+                // Find the pane (supports localized names via aliases)
+                var pane = FindPane(outputWindow, paneName);
 
                 if (pane == null)
-                    return McpToolResult.Error($"Output pane '{paneName}' not found");
+                    return McpToolResult.Error($"Output pane '{paneName}' not found. Use output_read without pane parameter to list available panes.");
 
                 // Read content
                 var textDocument = pane.TextDocument;
