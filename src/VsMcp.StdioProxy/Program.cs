@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -17,7 +19,7 @@ namespace VsMcp.StdioProxy
     {
         private static readonly HttpClient HttpClient = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(120)
+            Timeout = TimeSpan.FromSeconds(30)
         };
 
         static async Task<int> Main(string[] args)
@@ -26,17 +28,26 @@ namespace VsMcp.StdioProxy
             int? port = null;
 
             // Try to discover the port with retries
-            for (int attempt = 0; attempt < 30; attempt++)
+            // If a specific PID is given, check that process exists; otherwise check for any devenv.exe
+            for (int attempt = 0; attempt < 10; attempt++)
             {
                 port = PortDiscovery.FindPort(pid);
                 if (port.HasValue)
                     break;
+
+                // Fail fast if no VS process is running
+                if (!IsVisualStudioRunning(pid))
+                {
+                    await Console.Error.WriteLineAsync("[VsMcp.StdioProxy] Visual Studio is not running.");
+                    return 1;
+                }
+
                 await Task.Delay(1000);
             }
 
             if (!port.HasValue)
             {
-                await Console.Error.WriteLineAsync("[VsMcp.StdioProxy] Could not find VS MCP server port. Is Visual Studio running with the VsMcp extension?");
+                await Console.Error.WriteLineAsync("[VsMcp.StdioProxy] Could not find VS MCP server port. The VsMcp extension may not be installed or loaded.");
                 return 1;
             }
 
@@ -136,6 +147,23 @@ namespace VsMcp.StdioProxy
                     ct.ThrowIfCancellationRequested();
                 }
                 return await readTask;
+            }
+        }
+
+        private static bool IsVisualStudioRunning(int? pid)
+        {
+            try
+            {
+                if (pid.HasValue)
+                {
+                    Process.GetProcessById(pid.Value);
+                    return true;
+                }
+                return Process.GetProcessesByName("devenv").Length > 0;
+            }
+            catch
+            {
+                return false;
             }
         }
 
