@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="VsMcp.Extension.a1b2c3d4-5e6f-7a8b-9c0d-e1f2a3b4c5d6" Version="1.0.0" Language="en-US" Publisher="VsMcp" />
+    <DisplayName>VS MCP Server</DisplayName>
+    <Description xml:space="preserve">Model Context Protocol (MCP) server for Visual Studio. Enables AI agents to control Visual Studio features including debugging, building, and editing.</Description>
+    <MoreInfo>https://github.com/anthropics/claude-code</MoreInfo>
+    <Tags>MCP, AI, Claude, Debugging, Automation</Tags>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)" />
+    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 18.0)" />
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)" />
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+  </Assets>
+</PackageManifest>
