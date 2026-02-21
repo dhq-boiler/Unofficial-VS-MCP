@@ -5,6 +5,7 @@ using System.Threading;
 using Microsoft.VisualStudio.Shell;
 using VsMcp.Extension.McpServer;
 using VsMcp.Extension.Services;
+using VsMcp.Extension.Tools;
 using Task = System.Threading.Tasks.Task;
 
 namespace VsMcp.Extension
@@ -40,7 +41,10 @@ namespace VsMcp.Extension
 
         private void RegisterTools()
         {
-            // Tools will be registered here as they are implemented
+            GeneralTools.Register(_toolRegistry, _serviceAccessor);
+            SolutionTools.Register(_toolRegistry, _serviceAccessor);
+            ProjectTools.Register(_toolRegistry, _serviceAccessor);
+            BuildTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         protected override void Dispose(bool disposing)

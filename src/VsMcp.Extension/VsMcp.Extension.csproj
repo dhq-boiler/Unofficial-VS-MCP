@@ -15,6 +15,7 @@
     <StartAction>Program</StartAction>
     <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>
+    <NoWarn>VSTHRD010;VSTHRD110</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
