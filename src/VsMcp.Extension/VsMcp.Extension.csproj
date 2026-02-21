@@ -35,6 +35,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </None>
@@ -42,6 +48,21 @@
 
   <!-- Import VSSDK targets for VSIX packaging -->
   <Import Project="$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.13.2126\tools\vssdk\Microsoft.VsSDK.targets" />
+
+  <!-- Publish StdioProxy and include in VSIX -->
+  <PropertyGroup>
+    <StdioProxyPublishDir>$(ProjectDir)obj\StdioProxy\</StdioProxyPublishDir>
+    <CreateVsixContainerDependsOn>PublishStdioProxy;$(CreateVsixContainerDependsOn)</CreateVsixContainerDependsOn>
+  </PropertyGroup>
+
+  <Target Name="PublishStdioProxy">
+    <Exec Command="dotnet publish &quot;$(ProjectDir)..\VsMcp.StdioProxy\VsMcp.StdioProxy.csproj&quot; -c $(Configuration) -o &quot;$(StdioProxyPublishDir).&quot; --no-self-contained -v quiet" />
+    <ItemGroup>
+      <VSIXSourceItem Include="$(StdioProxyPublishDir)*.exe;$(StdioProxyPublishDir)*.dll;$(StdioProxyPublishDir)*.json">
+        <VSIXSubPath>StdioProxy</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+  </Target>
 
   <!-- Hook VSIX packaging into the build process -->
   <Target Name="CreateVsixAfterBuild" AfterTargets="Build"
