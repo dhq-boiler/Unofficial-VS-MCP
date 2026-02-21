@@ -104,7 +104,8 @@ namespace VsMcp.Extension.McpServer
                         status = "ok",
                         server = McpConstants.ServerName,
                         version = McpConstants.ServerVersion,
-                        port = _port
+                        port = _port,
+                        solutionState = VsMcpPackage.SolutionState
                     });
                     await WriteResponseAsync(response, 200, healthJson);
                     return;

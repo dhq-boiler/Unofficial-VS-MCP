@@ -100,6 +100,7 @@ namespace VsMcp.Extension.Tools
                 return McpToolResult.Success(new
                 {
                     solution = new { name = solutionName, path = solutionPath, isOpen },
+                    solutionState = VsMcpPackage.SolutionState,
                     activeDocument = activeDoc,
                     debuggerMode = debugMode,
                     vsVersion = dte.Version,
