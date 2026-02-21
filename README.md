@@ -4,7 +4,7 @@
 
 > This is a **beta release**. Feedback and bug reports are welcome on [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues).
 
-> **100% AI Generated** — このプロジェクトのコードはすべて AI (Claude) によって生成されています。
+> **100% AI Generated** — All code in this project was generated entirely by AI (Claude).
 
 ## Features
 
@@ -62,9 +62,9 @@ When Visual Studio is not running, the StdioProxy provides offline responses for
 
 ## Contributing
 
-**Pull Request は受け付けておりません。**
+**Pull Requests are not accepted.**
 
-要望や不具合の報告は [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues) にてお知らせください。
+For feature requests and bug reports, please use [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues).
 
 ## License
 
