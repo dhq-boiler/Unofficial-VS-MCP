@@ -37,13 +37,19 @@ VS MCP Server exposes **75 tools** across the following categories:
 
 ## Setup — Connecting with Claude Code
 
-Add the following to your Claude Code MCP configuration:
+**Option A** — CLI command:
+
+```
+claude mcp add vs-mcp -- "C:\Users\<USERNAME>\AppData\Local\VsMcp\bin\VsMcp.StdioProxy.exe"
+```
+
+**Option B** — Manual configuration (add to your MCP config JSON):
 
 ```json
 {
   "mcpServers": {
     "vs-mcp": {
-      "command": "%LOCALAPPDATA%\\VsMcp\\bin\\VsMcp.StdioProxy.exe"
+      "command": "C:\\Users\\<USERNAME>\\AppData\\Local\\VsMcp\\bin\\VsMcp.StdioProxy.exe"
     }
   }
 }
