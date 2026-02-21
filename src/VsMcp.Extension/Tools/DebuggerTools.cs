@@ -18,7 +18,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "debug_start",
-                    "Start debugging the startup project (F5)",
+                    "Start debugging the startup project (equivalent to F5). Use this instead of trying to launch Visual Studio or press F5 manually.",
                     SchemaBuilder.Empty()),
                 args => DebugStartAsync(accessor));
 

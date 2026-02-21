@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
@@ -12,6 +14,68 @@ namespace VsMcp.Extension.Tools
 {
     public static class GeneralTools
     {
+        private static readonly Dictionary<string, string> ToolCategories = new Dictionary<string, string>
+        {
+            // General
+            { "execute_command", "General" },
+            { "get_status", "General" },
+            { "get_help", "General" },
+            // Solution
+            { "solution_open", "Solution" },
+            { "solution_close", "Solution" },
+            { "solution_info", "Solution" },
+            // Project
+            { "project_list", "Project" },
+            { "project_info", "Project" },
+            // Build
+            { "build_solution", "Build" },
+            { "build_project", "Build" },
+            { "clean", "Build" },
+            { "rebuild", "Build" },
+            { "get_build_errors", "Build" },
+            // Editor
+            { "file_open", "Editor" },
+            { "file_close", "Editor" },
+            { "file_read", "Editor" },
+            { "file_write", "Editor" },
+            { "file_edit", "Editor" },
+            { "get_active_document", "Editor" },
+            { "find_in_files", "Editor" },
+            // Debugger
+            { "debug_start", "Debugger" },
+            { "debug_stop", "Debugger" },
+            { "debug_restart", "Debugger" },
+            { "debug_attach", "Debugger" },
+            { "debug_break", "Debugger" },
+            { "debug_continue", "Debugger" },
+            { "debug_step_over", "Debugger" },
+            { "debug_step_into", "Debugger" },
+            { "debug_step_out", "Debugger" },
+            { "debug_get_callstack", "Debugger" },
+            { "debug_get_locals", "Debugger" },
+            { "debug_get_threads", "Debugger" },
+            { "debug_get_mode", "Debugger" },
+            { "debug_evaluate", "Debugger" },
+            // Breakpoint
+            { "breakpoint_set", "Breakpoint" },
+            { "breakpoint_set_conditional", "Breakpoint" },
+            { "breakpoint_remove", "Breakpoint" },
+            { "breakpoint_list", "Breakpoint" },
+            // Output
+            { "output_write", "Output" },
+            { "output_read", "Output" },
+            { "error_list_get", "Output" },
+            // UI Automation
+            { "ui_capture_window", "UI" },
+            { "ui_capture_region", "UI" },
+            { "ui_get_tree", "UI" },
+            { "ui_find_elements", "UI" },
+            { "ui_get_element", "UI" },
+            { "ui_click", "UI" },
+            { "ui_set_value", "UI" },
+            { "ui_invoke", "UI" },
+        };
+
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
             registry.Register(
@@ -27,9 +91,52 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "get_status",
-                    "Get the current Visual Studio status including solution state, active document, and debugger mode",
+                    "Get the current Visual Studio status including solution state, active document, and debugger mode. Use this instead of curl or other HTTP requests to check VS state.",
                     SchemaBuilder.Empty()),
                 args => GetStatusAsync(accessor));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "get_help",
+                    "Get a categorized list of all available vs-mcp tools with descriptions. Call this first to understand what tools are available.",
+                    SchemaBuilder.Empty()),
+                args => GetHelpAsync(registry));
+        }
+
+        private static Task<McpToolResult> GetHelpAsync(McpToolRegistry registry)
+        {
+            var allTools = registry.GetAllDefinitions();
+            var categorized = new Dictionary<string, List<object>>();
+
+            foreach (var tool in allTools)
+            {
+                var category = ToolCategories.TryGetValue(tool.Name, out var cat) ? cat : "Other";
+                if (!categorized.ContainsKey(category))
+                    categorized[category] = new List<object>();
+
+                categorized[category].Add(new
+                {
+                    name = tool.Name,
+                    description = tool.Description
+                });
+            }
+
+            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Output", "UI", "Other" };
+            var ordered = new List<object>();
+            foreach (var cat in categoryOrder)
+            {
+                if (categorized.TryGetValue(cat, out var tools))
+                {
+                    ordered.Add(new { category = cat, tools });
+                }
+            }
+
+            return Task.FromResult(McpToolResult.Success(new
+            {
+                totalTools = allTools.Count,
+                tips = "Use build_solution instead of MSBuild CLI. Use debug_start instead of pressing F5. Use get_status instead of curl. Use output_read to read Build/Debug output panes.",
+                categories = ordered
+            }));
         }
 
         private static async Task<McpToolResult> ExecuteCommandAsync(VsServiceAccessor accessor, JObject args)

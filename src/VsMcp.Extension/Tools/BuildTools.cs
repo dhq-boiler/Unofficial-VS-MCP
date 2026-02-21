@@ -18,7 +18,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "build_solution",
-                    "Build the entire solution",
+                    "Build the entire solution in Visual Studio. Use this instead of running MSBuild.exe from the command line.",
                     SchemaBuilder.Empty()),
                 args => BuildSolutionAsync(accessor));
 
@@ -48,7 +48,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "get_build_errors",
-                    "Get the list of build errors and warnings from the Error List",
+                    "Get the list of build errors and warnings from the Visual Studio Error List. Call this after build_solution to check results.",
                     SchemaBuilder.Empty()),
                 args => GetBuildErrorsAsync(accessor));
         }

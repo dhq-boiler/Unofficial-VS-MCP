@@ -36,7 +36,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "output_read",
-                    "Read the content of a Visual Studio Output window pane",
+                    "Read the content of a Visual Studio Output window pane. Supports English and Japanese pane names (e.g. 'Build' or 'ビルド'). Call without pane parameter to list available panes.",
                     SchemaBuilder.Create()
                         .AddString("pane", "The name of the output pane to read (e.g. 'Build', 'Debug')")
                         .Build()),
