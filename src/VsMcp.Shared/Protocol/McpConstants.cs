@@ -34,7 +34,7 @@ namespace VsMcp.Shared.Protocol
                 + "Do NOT use curl to check status — use get_status. "
                 + "Do NOT read output panes manually — use output_read. "
                 + "Call get_help for a full categorized tool list. "
-                + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Output, UI Automation. "
+                + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Watch, Thread, Process, Immediate, Module, Register, Exception, Memory, Parallel, Diagnostics, Output, UI Automation. "
                 + "OFFLINE MODE: If a tool returns 'Visual Studio is not running', the error message includes a list of detected VS installations with their devenv.exe paths. "
                 + "Ask the user which version to start, showing the detected list. "
                 + "Use PowerShell Start-Process with the exact devenv.exe path from the list (NOT cmd). "

@@ -103,6 +103,16 @@ namespace VsMcp.Extension
             BreakpointTools.Register(_toolRegistry, _serviceAccessor);
             OutputTools.Register(_toolRegistry, _serviceAccessor);
             UiTools.Register(_toolRegistry, _serviceAccessor);
+            WatchTools.Register(_toolRegistry, _serviceAccessor);
+            ThreadTools.Register(_toolRegistry, _serviceAccessor);
+            ProcessTools.Register(_toolRegistry, _serviceAccessor);
+            ImmediateWindowTools.Register(_toolRegistry, _serviceAccessor);
+            ModuleTools.Register(_toolRegistry, _serviceAccessor);
+            CpuRegisterTools.Register(_toolRegistry, _serviceAccessor);
+            ExceptionSettingsTools.Register(_toolRegistry, _serviceAccessor);
+            MemoryTools.Register(_toolRegistry, _serviceAccessor);
+            ParallelDebugTools.Register(_toolRegistry, _serviceAccessor);
+            DiagnosticsTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         private void DeployStdioProxy()

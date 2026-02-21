@@ -61,6 +61,42 @@ namespace VsMcp.Extension.Tools
             { "breakpoint_set_conditional", "Breakpoint" },
             { "breakpoint_remove", "Breakpoint" },
             { "breakpoint_list", "Breakpoint" },
+            { "breakpoint_enable", "Breakpoint" },
+            { "breakpoint_set_hitcount", "Breakpoint" },
+            { "breakpoint_set_function", "Breakpoint" },
+            // Watch
+            { "watch_add", "Watch" },
+            { "watch_remove", "Watch" },
+            { "watch_list", "Watch" },
+            // Thread
+            { "thread_switch", "Thread" },
+            { "thread_freeze", "Thread" },
+            { "thread_thaw", "Thread" },
+            { "thread_get_callstack", "Thread" },
+            // Process
+            { "process_list_debugged", "Process" },
+            { "process_list_local", "Process" },
+            { "process_detach", "Process" },
+            { "process_terminate", "Process" },
+            // Immediate Window
+            { "immediate_execute", "Immediate" },
+            // Module
+            { "module_list", "Module" },
+            // CPU Register
+            { "register_list", "Register" },
+            { "register_get", "Register" },
+            // Exception Settings
+            { "exception_settings_get", "Exception" },
+            { "exception_settings_set", "Exception" },
+            // Memory
+            { "memory_read", "Memory" },
+            { "memory_read_variable", "Memory" },
+            // Parallel Debug
+            { "parallel_stacks", "Parallel" },
+            { "parallel_watch", "Parallel" },
+            { "parallel_tasks_list", "Parallel" },
+            // Diagnostics
+            { "diagnostics_binding_errors", "Diagnostics" },
             // Output
             { "output_write", "Output" },
             { "output_read", "Output" },
@@ -121,7 +157,7 @@ namespace VsMcp.Extension.Tools
                 });
             }
 
-            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Output", "UI", "Other" };
+            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "UI", "Other" };
             var ordered = new List<object>();
             foreach (var cat in categoryOrder)
             {
