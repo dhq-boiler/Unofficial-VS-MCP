@@ -52,6 +52,40 @@ namespace VsMcp.Extension.Tools
                     "List all breakpoints in the current solution",
                     SchemaBuilder.Empty()),
                 args => BreakpointListAsync(accessor));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "breakpoint_enable",
+                    "Enable or disable a breakpoint at a specific file and line",
+                    SchemaBuilder.Create()
+                        .AddString("file", "Full path to the source file", required: true)
+                        .AddInteger("line", "Line number of the breakpoint", required: true)
+                        .AddBoolean("enabled", "true to enable, false to disable", required: true)
+                        .Build()),
+                args => BreakpointEnableAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "breakpoint_set_hitcount",
+                    "Set a breakpoint with a hit count condition at a specific file and line",
+                    SchemaBuilder.Create()
+                        .AddString("file", "Full path to the source file", required: true)
+                        .AddInteger("line", "Line number to set the breakpoint", required: true)
+                        .AddInteger("hitCount", "The hit count target value", required: true)
+                        .AddEnum("hitCountType", "When to break relative to the hit count",
+                            new[] { "equal", "greaterOrEqual", "multiple" })
+                        .Build()),
+                args => BreakpointSetHitCountAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "breakpoint_set_function",
+                    "Set a breakpoint on a function by name",
+                    SchemaBuilder.Create()
+                        .AddString("functionName", "The fully qualified function name (e.g. 'MyNamespace.MyClass.MyMethod')", required: true)
+                        .AddString("condition", "Optional condition expression for the breakpoint")
+                        .Build()),
+                args => BreakpointSetFunctionAsync(accessor, args));
         }
 
         private static async Task<McpToolResult> BreakpointSetAsync(VsServiceAccessor accessor, JObject args)
@@ -181,6 +215,128 @@ namespace VsMcp.Extension.Tools
         private static int TryGetHitCount(Breakpoint2 bp)
         {
             try { return bp.CurrentHits; } catch { return 0; }
+        }
+
+        private static async Task<McpToolResult> BreakpointEnableAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var file = args.Value<string>("file");
+            if (string.IsNullOrEmpty(file))
+                return McpToolResult.Error("Parameter 'file' is required");
+
+            var line = args.Value<int?>("line");
+            if (!line.HasValue || line.Value <= 0)
+                return McpToolResult.Error("Parameter 'line' is required and must be positive");
+
+            var enabled = args.Value<bool?>("enabled");
+            if (!enabled.HasValue)
+                return McpToolResult.Error("Parameter 'enabled' is required");
+
+            return await accessor.RunOnUIThreadAsync(() =>
+            {
+                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+
+                var found = false;
+                foreach (Breakpoint2 bp in dte.Debugger.Breakpoints)
+                {
+                    try
+                    {
+                        if (string.Equals(bp.File, file, StringComparison.OrdinalIgnoreCase) &&
+                            bp.FileLine == line.Value)
+                        {
+                            bp.Enabled = enabled.Value;
+                            found = true;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (!found)
+                    return McpToolResult.Error($"No breakpoint found at {file}:{line.Value}");
+
+                return McpToolResult.Success($"Breakpoint at {file}:{line.Value} {(enabled.Value ? "enabled" : "disabled")}");
+            });
+        }
+
+        private static async Task<McpToolResult> BreakpointSetHitCountAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var file = args.Value<string>("file");
+            if (string.IsNullOrEmpty(file))
+                return McpToolResult.Error("Parameter 'file' is required");
+
+            var line = args.Value<int?>("line");
+            if (!line.HasValue || line.Value <= 0)
+                return McpToolResult.Error("Parameter 'line' is required and must be positive");
+
+            var hitCount = args.Value<int?>("hitCount");
+            if (!hitCount.HasValue || hitCount.Value <= 0)
+                return McpToolResult.Error("Parameter 'hitCount' is required and must be positive");
+
+            var hitCountTypeStr = args.Value<string>("hitCountType") ?? "equal";
+
+            dbgHitCountType hitCountType;
+            switch (hitCountTypeStr)
+            {
+                case "greaterOrEqual":
+                    hitCountType = dbgHitCountType.dbgHitCountTypeGreaterOrEqual;
+                    break;
+                case "multiple":
+                    hitCountType = dbgHitCountType.dbgHitCountTypeMultiple;
+                    break;
+                default:
+                    hitCountType = dbgHitCountType.dbgHitCountTypeEqual;
+                    break;
+            }
+
+            return await accessor.RunOnUIThreadAsync(() =>
+            {
+                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+
+                dte.Debugger.Breakpoints.Add("", file, line.Value,
+                    HitCount: hitCount.Value,
+                    HitCountType: hitCountType);
+
+                return McpToolResult.Success(new
+                {
+                    message = $"Breakpoint with hit count set at {file}:{line.Value}",
+                    hitCount = hitCount.Value,
+                    hitCountType = hitCountTypeStr
+                });
+            });
+        }
+
+        private static async Task<McpToolResult> BreakpointSetFunctionAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var functionName = args.Value<string>("functionName");
+            if (string.IsNullOrEmpty(functionName))
+                return McpToolResult.Error("Parameter 'functionName' is required");
+
+            var condition = args.Value<string>("condition");
+
+            return await accessor.RunOnUIThreadAsync(() =>
+            {
+                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+
+                if (!string.IsNullOrEmpty(condition))
+                {
+                    dte.Debugger.Breakpoints.Add(Function: functionName,
+                        Condition: condition,
+                        ConditionType: dbgBreakpointConditionType.dbgBreakpointConditionTypeWhenTrue);
+                }
+                else
+                {
+                    dte.Debugger.Breakpoints.Add(Function: functionName);
+                }
+
+                return McpToolResult.Success(new
+                {
+                    message = $"Function breakpoint set on '{functionName}'",
+                    functionName,
+                    condition = condition ?? ""
+                });
+            });
         }
     }
 }
