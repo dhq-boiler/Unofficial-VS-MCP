@@ -45,6 +45,7 @@ namespace VsMcp.Extension
             SolutionTools.Register(_toolRegistry, _serviceAccessor);
             ProjectTools.Register(_toolRegistry, _serviceAccessor);
             BuildTools.Register(_toolRegistry, _serviceAccessor);
+            EditorTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         protected override void Dispose(bool disposing)
