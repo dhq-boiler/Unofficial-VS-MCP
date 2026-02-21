@@ -48,6 +48,7 @@ namespace VsMcp.Extension
             EditorTools.Register(_toolRegistry, _serviceAccessor);
             DebuggerTools.Register(_toolRegistry, _serviceAccessor);
             BreakpointTools.Register(_toolRegistry, _serviceAccessor);
+            OutputTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         protected override void Dispose(bool disposing)
