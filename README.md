@@ -4,6 +4,8 @@
 
 > This is a **beta release**. Feedback and bug reports are welcome on [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues).
 
+> **100% AI Generated** — このプロジェクトのコードはすべて AI (Claude) によって生成されています。
+
 ## Features
 
 VS MCP Server exposes **75 tools** across the following categories:
