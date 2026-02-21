@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json.schemastore.org/vsix-publish",
+  "categories": [
+    "coding",
+    "debuggers",
+    "testing"
+  ],
+  "identity": {
+    "internalName": "vs-mcp-server"
+  },
+  "overview": "overview.md",
+  "publisher": "dhq-boiler",
+  "priceCategory": "free",
+  "qna": true,
+  "repo": "https://github.com/dhq-boiler/Unoffcial-VS-MCP"
+}
