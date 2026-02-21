@@ -37,6 +37,8 @@ VS MCP Server exposes **75 tools** across the following categories:
 
 ## Setup — Connecting with Claude Code
 
+> **Note:** `%LOCALAPPDATA%` is not recognized in bash. You must specify the full absolute path (e.g. `C:\Users\<USERNAME>\AppData\Local\...`).
+
 **Option A** — CLI command:
 
 ```
