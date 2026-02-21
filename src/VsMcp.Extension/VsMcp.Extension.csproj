@@ -46,6 +46,18 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Resources\icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\LICENSE.txt">
+      <Link>LICENSE.txt</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <!-- Import VSSDK targets for VSIX packaging -->
   <Import Project="$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.13.2126\tools\vssdk\Microsoft.VsSDK.targets" />
 
