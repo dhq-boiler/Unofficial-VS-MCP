@@ -36,9 +36,10 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "output_read",
-                    "Read the content of a Visual Studio Output window pane. Supports English and Japanese pane names (e.g. 'Build' or 'ビルド'). Call without pane parameter to list available panes.",
+                    "Read the content of a Visual Studio Output window pane. Supports English and Japanese pane names (e.g. 'Build' or 'ビルド'). Call without pane parameter to list available panes. Returns the last 'tail' lines by default (200). Use tail=0 to read all content.",
                     SchemaBuilder.Create()
                         .AddString("pane", "The name of the output pane to read (e.g. 'Build', 'Debug')")
+                        .AddInteger("tail", "Number of lines to return from the end (default: 200, 0 = all)")
                         .Build()),
                 args => OutputReadAsync(accessor, args));
 
@@ -119,6 +120,8 @@ namespace VsMcp.Extension.Tools
         private static async Task<McpToolResult> OutputReadAsync(VsServiceAccessor accessor, JObject args)
         {
             var paneName = args.Value<string>("pane");
+            var tailParam = args["tail"];
+            int tailLines = tailParam != null ? (int)tailParam : 200;
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
@@ -154,9 +157,23 @@ namespace VsMcp.Extension.Tools
                 var editPoint = textDocument.StartPoint.CreateEditPoint();
                 var content = editPoint.GetText(textDocument.EndPoint);
 
+                // Apply tail limit
+                var totalLines = textDocument.EndPoint.Line;
+                bool truncated = false;
+                if (tailLines > 0 && totalLines > tailLines)
+                {
+                    var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                    var startIndex = lines.Length > tailLines ? lines.Length - tailLines : 0;
+                    content = string.Join("\n", lines, startIndex, lines.Length - startIndex);
+                    truncated = true;
+                }
+
                 return McpToolResult.Success(new
                 {
                     pane = paneName,
+                    totalLines,
+                    truncated,
+                    tailLines = truncated ? tailLines : totalLines,
                     content
                 });
             });

@@ -79,12 +79,13 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "find_in_files",
-                    "Search for text in files within the solution",
+                    "Search for text in files within the solution. Searches the file system directly (fast, does not block VS UI). Skips bin/obj/.vs/packages/node_modules directories.",
                     SchemaBuilder.Create()
                         .AddString("query", "The search text or pattern", required: true)
                         .AddString("filePattern", "File pattern to filter (e.g. '*.cs', '*.xaml')")
                         .AddBoolean("matchCase", "Whether to match case (default: false)")
                         .AddBoolean("useRegex", "Whether to use regular expressions (default: false)")
+                        .AddInteger("maxResults", "Maximum number of results to return (default: 100)")
                         .Build()),
                 args => FindInFilesAsync(accessor, args));
         }
@@ -325,54 +326,89 @@ namespace VsMcp.Extension.Tools
             var filePattern = args.Value<string>("filePattern") ?? "*.*";
             var matchCase = args.Value<bool?>("matchCase") ?? false;
             var useRegex = args.Value<bool?>("useRegex") ?? false;
+            var maxResults = args.Value<int?>("maxResults") ?? 100;
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            // Get solution directory from UI thread
+            string solutionDir = null;
+            await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
-                // Use Find object for searching
-                var find = dte.Find;
-                find.FindWhat = query;
-                find.FilesOfType = filePattern;
-                find.MatchCase = matchCase;
-                find.PatternSyntax = useRegex ? vsFindPatternSyntax.vsFindPatternSyntaxRegExpr : vsFindPatternSyntax.vsFindPatternSyntaxLiteral;
-                find.Target = vsFindTarget.vsFindTargetSolution;
-                find.SearchSubfolders = true;
-                find.Action = vsFindAction.vsFindActionFindAll;
-                find.ResultsLocation = vsFindResultsLocation.vsFindResults1;
-
-                var result = find.Execute();
-
-                // Read results from Find Results window
-                Window findResultsWindow = null;
-                try
+                if (dte.Solution != null && !string.IsNullOrEmpty(dte.Solution.FullName))
                 {
-                    findResultsWindow = dte.Windows.Item("{0F887920-C2B6-11D2-9375-0080C747D9A0}"); // Find Results 1
+                    solutionDir = Path.GetDirectoryName(dte.Solution.FullName);
                 }
-                catch { }
+            });
 
-                string resultText = "";
-                if (findResultsWindow != null)
+            if (string.IsNullOrEmpty(solutionDir))
+                return McpToolResult.Error("No solution is open");
+
+            // Search files on a background thread (not the UI thread)
+            return await Task.Run(() =>
+            {
+                var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                var results = new List<object>();
+                var filesSearched = 0;
+
+                System.Text.RegularExpressions.Regex regex = null;
+                if (useRegex)
                 {
+                    var options = matchCase
+                        ? System.Text.RegularExpressions.RegexOptions.None
+                        : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+                    regex = new System.Text.RegularExpressions.Regex(query, options);
+                }
+
+                foreach (var file in Directory.EnumerateFiles(solutionDir, filePattern, SearchOption.AllDirectories))
+                {
+                    // Skip common non-source directories
+                    if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
+                        file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") ||
+                        file.Contains($"{Path.DirectorySeparatorChar}.vs{Path.DirectorySeparatorChar}") ||
+                        file.Contains($"{Path.DirectorySeparatorChar}packages{Path.DirectorySeparatorChar}") ||
+                        file.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}"))
+                        continue;
+
+                    filesSearched++;
+
                     try
                     {
-                        var textSelection = findResultsWindow.Selection as TextSelection;
-                        if (textSelection != null)
+                        var lines = File.ReadAllLines(file);
+                        for (int i = 0; i < lines.Length; i++)
                         {
-                            textSelection.SelectAll();
-                            resultText = textSelection.Text;
+                            bool match = useRegex
+                                ? regex.IsMatch(lines[i])
+                                : lines[i].IndexOf(query, comparison) >= 0;
+
+                            if (match)
+                            {
+                                results.Add(new
+                                {
+                                    file = file.Substring(solutionDir.Length + 1),
+                                    line = i + 1,
+                                    text = lines[i].Trim()
+                                });
+
+                                if (results.Count >= maxResults)
+                                    break;
+                            }
                         }
                     }
-                    catch { }
+                    catch { /* skip unreadable files */ }
+
+                    if (results.Count >= maxResults)
+                        break;
                 }
 
                 return McpToolResult.Success(new
                 {
                     query,
                     filePattern,
-                    results = resultText,
-                    matchFound = result == vsFindResult.vsFindResultFound || result == vsFindResult.vsFindResultReplaced
+                    filesSearched,
+                    matchCount = results.Count,
+                    truncated = results.Count >= maxResults,
+                    results
                 });
             });
         }

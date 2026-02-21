@@ -76,14 +76,7 @@ namespace VsMcp.Extension.McpServer
                     ["name"] = McpConstants.ServerName,
                     ["version"] = McpConstants.ServerVersion
                 },
-                ["instructions"] = $"You are connected to vs-mcp, a Visual Studio automation server with {toolCount} tools. "
-                    + "IMPORTANT: Always use these MCP tools instead of manual approaches. "
-                    + "Do NOT use MSBuild CLI — use build_solution/build_project. "
-                    + "Do NOT use cmd/PowerShell to launch VS or press F5 — use debug_start. "
-                    + "Do NOT use curl to check status — use get_status. "
-                    + "Do NOT read output panes manually — use output_read. "
-                    + "Call get_help for a full categorized tool list. "
-                    + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Output, UI Automation."
+                ["instructions"] = McpConstants.GetInstructions(toolCount)
             };
             return JsonRpcResponse.Success(request.Id, result);
         }
@@ -139,8 +132,20 @@ namespace VsMcp.Extension.McpServer
                     return JsonRpcResponse.Success(request.Id, timeoutResult);
                 }
 
-                // Run tool handler - it will switch to UI thread internally via RunOnUIThreadAsync
-                var toolResult = await Task.Run(() => handler(args));
+                // Run tool handler with timeout
+                var toolTask = Task.Run(() => handler(args));
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60));
+                var completed = await Task.WhenAny(toolTask, timeoutTask);
+
+                if (completed == timeoutTask)
+                {
+                    var timeoutResult = McpToolResult.Error(
+                        $"Tool '{toolName}' timed out after 60 seconds. "
+                        + "Visual Studio may be busy or blocked by a modal dialog.");
+                    return JsonRpcResponse.Success(request.Id, timeoutResult);
+                }
+
+                var toolResult = await toolTask;
                 return JsonRpcResponse.Success(request.Id, toolResult);
             }
             catch (COMException ex)

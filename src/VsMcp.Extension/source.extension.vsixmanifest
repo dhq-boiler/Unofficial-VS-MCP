@@ -8,13 +8,13 @@
     <Tags>MCP, AI, Claude, Debugging, Automation</Tags>
   </Metadata>
   <Installation AllUsers="false">
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 20.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Professional" Version="[17.0, 20.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 20.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -22,7 +22,7 @@
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
   </Dependencies>
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,19.0)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,20.0)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />

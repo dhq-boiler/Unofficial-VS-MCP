@@ -10,6 +10,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using VsMcp.Extension.McpServer;
 using VsMcp.Extension.Services;
 using VsMcp.Extension.Tools;
+using VsMcp.Shared;
 using VsMcp.Shared.Protocol;
 using Task = System.Threading.Tasks.Task;
 
@@ -43,6 +44,9 @@ namespace VsMcp.Extension
 
             // Register all tools
             RegisterTools();
+
+            // Cache tool definitions for offline StdioProxy use
+            ToolDefinitionCache.Write(_toolRegistry.GetAllDefinitions());
 
             var router = new McpRequestRouter(_toolRegistry);
             _httpServer = new McpHttpServer(router);

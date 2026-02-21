@@ -24,5 +24,21 @@ namespace VsMcp.Shared.Protocol
         public const string PortFilePrefix = "server.";
         public const string PortFileSuffix = ".port";
         public const string PortFileFolder = "VsMcp";
+
+        public static string GetInstructions(int toolCount)
+        {
+            return $"You are connected to vs-mcp, a Visual Studio automation server with {toolCount} tools. "
+                + "IMPORTANT: Always use these MCP tools instead of manual approaches. "
+                + "Do NOT use MSBuild CLI — use build_solution/build_project. "
+                + "Do NOT use cmd/PowerShell to launch VS or press F5 — use debug_start. "
+                + "Do NOT use curl to check status — use get_status. "
+                + "Do NOT read output panes manually — use output_read. "
+                + "Call get_help for a full categorized tool list. "
+                + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Output, UI Automation. "
+                + "OFFLINE MODE: If a tool returns 'Visual Studio is not running', the error message includes a list of detected VS installations with their devenv.exe paths. "
+                + "Ask the user which version to start, showing the detected list. "
+                + "Use PowerShell Start-Process with the exact devenv.exe path from the list (NOT cmd). "
+                + "After starting VS, wait 30 seconds, then retry.";
+        }
     }
 }
