@@ -29,6 +29,17 @@ namespace VsMcp.Shared.Protocol
             return Success(json);
         }
 
+        public static McpToolResult Image(string base64Data, string mimeType = "image/png")
+        {
+            return new McpToolResult
+            {
+                Content = new List<McpContent>
+                {
+                    new McpContent { Type = "image", Data = base64Data, MimeType = mimeType }
+                }
+            };
+        }
+
         public static McpToolResult Error(string message)
         {
             return new McpToolResult
@@ -49,5 +60,11 @@ namespace VsMcp.Shared.Protocol
 
         [JsonProperty("text", NullValueHandling = NullValueHandling.Ignore)]
         public string Text { get; set; }
+
+        [JsonProperty("data", NullValueHandling = NullValueHandling.Ignore)]
+        public string Data { get; set; }
+
+        [JsonProperty("mimeType", NullValueHandling = NullValueHandling.Ignore)]
+        public string MimeType { get; set; }
     }
 }
