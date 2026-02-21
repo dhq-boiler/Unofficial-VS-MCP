@@ -300,8 +300,8 @@ namespace VsMcp.Extension.Tools
                         {
                             functionName = frame.FunctionName,
                             module = frame.Module,
-                            fileName = TryGetFrameFileName(frame),
-                            line = TryGetFrameLine(frame),
+                            fileName = DebugHelpers.TryGetFrameFileName(frame),
+                            line = DebugHelpers.TryGetFrameLine(frame),
                             language = frame.Language
                         });
                     }
@@ -318,27 +318,6 @@ namespace VsMcp.Extension.Tools
             });
         }
 
-        private static string TryGetFrameFileName(StackFrame frame)
-        {
-            try
-            {
-                var prop = frame.GetType().GetProperty("FileName");
-                if (prop != null) return prop.GetValue(frame)?.ToString() ?? "";
-                return "";
-            }
-            catch { return ""; }
-        }
-
-        private static int TryGetFrameLine(StackFrame frame)
-        {
-            try
-            {
-                var prop = frame.GetType().GetProperty("LineNumber");
-                if (prop != null) return (int)(uint)prop.GetValue(frame);
-                return 0;
-            }
-            catch { return 0; }
-        }
 
         private static async Task<McpToolResult> DebugGetLocalsAsync(VsServiceAccessor accessor)
         {
@@ -355,7 +334,7 @@ namespace VsMcp.Extension.Tools
                 // If current frame has no locals (e.g., native code), try to find a managed frame
                 if (frame == null || frame.Locals == null || frame.Locals.Count == 0)
                 {
-                    if (!TryNavigateToManagedFrame(dte.Debugger))
+                    if (!DebugHelpers.TryNavigateToManagedFrame(dte.Debugger))
                         return McpToolResult.Error("No managed stack frame found. The debugger is stopped in native code.");
                     frame = dte.Debugger.CurrentStackFrame;
                 }
@@ -426,7 +405,7 @@ namespace VsMcp.Extension.Tools
                             name = thread.Name,
                             isFrozen = thread.IsFrozen,
                             isAlive = thread.IsAlive,
-                            location = TryGetThreadLocation(thread)
+                            location = DebugHelpers.TryGetThreadLocation(thread)
                         });
                     }
                     catch { }
@@ -438,173 +417,6 @@ namespace VsMcp.Extension.Tools
                     threads
                 });
             });
-        }
-
-        /// <summary>
-        /// Determines if a stack frame is likely a managed code frame.
-        /// Uses heuristics: known managed languages, or namespace-qualified function names.
-        /// </summary>
-        private static bool IsManagedFrame(StackFrame frame)
-        {
-            try
-            {
-                var lang = frame.Language;
-                // Explicitly managed languages
-                if (!string.IsNullOrEmpty(lang) && lang != "不明" && lang != "Unknown")
-                    return true;
-
-                var funcName = frame.FunctionName;
-                if (string.IsNullOrEmpty(funcName))
-                    return false;
-
-                // Skip raw native addresses (e.g., "00007ffb63771324")
-                if (funcName.Length >= 8 && funcName[0] == '0' && funcName[1] == '0')
-                    return false;
-
-                // Skip transition markers (e.g., "[マネージドからネイティブへの移行]")
-                if (funcName.StartsWith("["))
-                    return false;
-
-                // Managed frames have namespace-qualified names with dots
-                // e.g., "System.Windows.Application.RunInternal", "vara.App.Main"
-                if (funcName.Contains(".") && !funcName.Contains("\\"))
-                    return true;
-            }
-            catch { }
-            return false;
-        }
-
-        /// <summary>
-        /// Attempts to navigate to a managed stack frame in the current thread.
-        /// Returns true if a managed frame was found and set as current.
-        /// </summary>
-        private static bool TryNavigateToManagedFrame(Debugger debugger)
-        {
-            try
-            {
-                var thread = debugger.CurrentThread;
-                if (thread == null) return false;
-
-                // First pass: look for frames with known managed language on current thread
-                foreach (StackFrame frame in thread.StackFrames)
-                {
-                    try
-                    {
-                        if (IsManagedFrame(frame))
-                        {
-                            debugger.CurrentStackFrame = frame;
-                            return true;
-                        }
-                    }
-                    catch { }
-                }
-
-                // Second pass: try other threads
-                foreach (Thread t in debugger.CurrentProgram.Threads)
-                {
-                    try
-                    {
-                        if (t.ID == thread.ID) continue;
-                        foreach (StackFrame frame in t.StackFrames)
-                        {
-                            try
-                            {
-                                if (IsManagedFrame(frame))
-                                {
-                                    debugger.CurrentThread = t;
-                                    debugger.CurrentStackFrame = frame;
-                                    return true;
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            return false;
-        }
-
-        /// <summary>
-        /// Tries to evaluate an expression, searching across frames and threads for one that works.
-        /// Returns the Expression result or null if evaluation failed everywhere.
-        /// </summary>
-        private static Expression TryEvaluateExpression(Debugger debugger, string expression)
-        {
-            // Try current frame first
-            try
-            {
-                var result = debugger.GetExpression(expression, false, 3000);
-                if (result.IsValidValue) return result;
-            }
-            catch { }
-
-            // Collect candidate frames: prefer user code (non-framework assemblies), then any managed
-            var candidates = new List<KeyValuePair<Thread, StackFrame>>();
-            var fallbacks = new List<KeyValuePair<Thread, StackFrame>>();
-
-            foreach (Thread t in debugger.CurrentProgram.Threads)
-            {
-                try
-                {
-                    foreach (StackFrame frame in t.StackFrames)
-                    {
-                        try
-                        {
-                            if (!IsManagedFrame(frame)) continue;
-
-                            var module = frame.Module ?? "";
-                            // User code: not from dotnet shared, Windows, or GAC paths
-                            bool isUserCode = !string.IsNullOrEmpty(module) &&
-                                !module.Contains("\\dotnet\\") &&
-                                !module.Contains("\\Windows\\") &&
-                                !module.Contains("\\Microsoft.NET\\");
-
-                            if (isUserCode)
-                                candidates.Add(new KeyValuePair<Thread, StackFrame>(t, frame));
-                            else
-                                fallbacks.Add(new KeyValuePair<Thread, StackFrame>(t, frame));
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-            }
-
-            // Try user code frames first, then fallback to framework frames
-            candidates.AddRange(fallbacks);
-
-            foreach (var candidate in candidates)
-            {
-                try
-                {
-                    debugger.CurrentThread = candidate.Key;
-                    debugger.CurrentStackFrame = candidate.Value;
-                    var result = debugger.GetExpression(expression, false, 3000);
-                    if (result.IsValidValue) return result;
-                }
-                catch { }
-            }
-
-            return null;
-        }
-
-        private static string TryGetThreadLocation(Thread thread)
-        {
-            try
-            {
-                var frames = thread.StackFrames;
-                if (frames != null)
-                {
-                    foreach (StackFrame frame in frames)
-                    {
-                        return frame.FunctionName;
-                    }
-                }
-            }
-            catch { }
-            return "";
         }
 
         private static async Task<McpToolResult> DebugGetModeAsync(VsServiceAccessor accessor)
@@ -648,7 +460,7 @@ namespace VsMcp.Extension.Tools
                     return McpToolResult.Error("Debugger must be in Break mode to evaluate expressions");
 
                 // Try evaluation, searching across frames and threads for one that works
-                var evalResult = TryEvaluateExpression(dte.Debugger, expression);
+                var evalResult = DebugHelpers.TryEvaluateExpression(dte.Debugger, expression);
                 if (evalResult == null)
                     return McpToolResult.Error("Expression evaluation failed: no suitable managed frame found");
 
