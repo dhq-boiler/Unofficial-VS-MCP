@@ -31,8 +31,15 @@ packages/
 ## Rider
 .idea/
 
+## Generated VSIX manifest
+src/VsMcp.Extension/extension.vsixmanifest
+
+## Claude Code
+.claude/
+
 ## OS
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
+nul

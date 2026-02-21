@@ -5,17 +5,24 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>VsMcp.Extension</RootNamespace>
     <AssemblyName>VsMcp.Extension</AssemblyName>
-    <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <UseCodebase>true</UseCodebase>
-    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
-    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
-    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <DeployExtension>false</DeployExtension>
     <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
     <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
     <StartAction>Program</StartAction>
     <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>
     <NoWarn>VSTHRD010;VSTHRD110</NoWarn>
+    <!-- Explicit VSSDK properties that need early evaluation -->
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <TargetVsixContainerName>VsMcp.Extension.vsix</TargetVsixContainerName>
+    <!-- Fix IntermediateOutputPath for VSSDK targets in SDK-style project -->
+    <IntermediateOutputPath Condition="'$(IntermediateOutputPath)' == ''">obj\$(Configuration)\$(TargetFramework)\</IntermediateOutputPath>
+    <CreatePkgDefAssemblyToProcess Condition="'$(CreatePkgDefAssemblyToProcess)' == ''">bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,9 +35,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="source.extension.vsixmanifest">
+    <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
-    </Content>
+    </None>
   </ItemGroup>
+
+  <!-- Import VSSDK targets for VSIX packaging -->
+  <Import Project="$(NuGetPackageRoot)microsoft.vssdk.buildtools\17.13.2126\tools\vssdk\Microsoft.VsSDK.targets" />
+
+  <!-- Hook VSIX packaging into the build process -->
+  <Target Name="CreateVsixAfterBuild" AfterTargets="Build"
+          DependsOnTargets="DetokenizeVsixManifestFile;GeneratePkgDef;CopyPkgDef;CreateVsixContainer" />
 
 </Project>
