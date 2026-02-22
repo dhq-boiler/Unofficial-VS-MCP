@@ -219,12 +219,12 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> UiCaptureWindowAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var hwnd = GetDebuggeeWindowHandle(accessor);
-                if (hwnd == IntPtr.Zero)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+            if (hwnd == IntPtr.Zero)
+                return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
 
+            return await Task.Run(() =>
+            {
                 if (!GetWindowRect(hwnd, out RECT rect))
                     return McpToolResult.Error("Failed to get window rectangle");
 
@@ -258,12 +258,12 @@ namespace VsMcp.Extension.Tools
             if (width <= 0 || height <= 0)
                 return McpToolResult.Error("Width and height must be positive values");
 
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var hwnd = GetDebuggeeWindowHandle(accessor);
-                if (hwnd == IntPtr.Zero)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+            if (hwnd == IntPtr.Zero)
+                return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
 
+            return await Task.Run(() =>
+            {
                 if (!GetWindowRect(hwnd, out RECT rect))
                     return McpToolResult.Error("Failed to get window rectangle");
 
