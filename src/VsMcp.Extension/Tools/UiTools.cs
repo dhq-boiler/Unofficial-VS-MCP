@@ -49,6 +49,36 @@ namespace VsMcp.Extension.Tools
 
         #endregion
 
+        private const int UiaTimeoutSeconds = 30;
+
+        private static Task<T> RunOnBackgroundSTAAsync<T>(Func<T> func)
+        {
+            var tcs = new TaskCompletionSource<T>();
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    tcs.SetResult(func());
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+            return tcs.Task;
+        }
+
+        private static async Task<T> RunUiaWithTimeoutAsync<T>(Func<T> func)
+        {
+            var task = RunOnBackgroundSTAAsync(func);
+            if (await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(UiaTimeoutSeconds))) != task)
+                throw new TimeoutException($"UI Automation timed out after {UiaTimeoutSeconds} seconds. The target application may not be responding.");
+            return await task;
+        }
+
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
             // UI Capture tools
