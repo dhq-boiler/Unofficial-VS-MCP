@@ -148,15 +148,42 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> DebugRestartAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
+            // Step 1: Stop debugging
+            var isRunning = await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
                 if (dte.Debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
-                    return McpToolResult.Error("Debugger is not running");
+                    return false;
 
-                dte.ExecuteCommand("Debug.Restart");
+                dte.Debugger.Stop(false);
+                return true;
+            });
+
+            if (!isRunning)
+                return McpToolResult.Error("Debugger is not running");
+
+            // Step 2: Wait for debugger to reach Design mode (up to 15 seconds)
+            for (int i = 0; i < 30; i++)
+            {
+                await Task.Delay(500);
+                var mode = await accessor.RunOnUIThreadAsync(() =>
+                {
+                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                        .Run(() => accessor.GetDteAsync());
+                    return dte.Debugger.CurrentMode;
+                });
+                if (mode == dbgDebugMode.dbgDesignMode)
+                    break;
+            }
+
+            // Step 3: Start debugging
+            return await accessor.RunOnUIThreadAsync(() =>
+            {
+                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+                dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging restarted");
             });
         }

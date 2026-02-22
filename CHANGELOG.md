@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] - 2026-02-22
+
+### Fixed
+- `debug_restart` failing with COM exception (`HRESULT E_FAIL`) without actually restarting the application. Replaced `Debug.Restart` command with explicit Stop → wait for DesignMode → Start sequence for reliability.
+
 ## [0.1.0] - 2026-02-22 (Beta)
 
 Initial beta release of VS MCP Server.
