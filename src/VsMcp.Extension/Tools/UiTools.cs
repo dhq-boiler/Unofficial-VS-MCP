@@ -153,6 +153,36 @@ namespace VsMcp.Extension.Tools
             return proc.MainWindowHandle;
         }
 
+        private static int GetDebuggeeProcessId(VsServiceAccessor accessor)
+        {
+            var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                .Run(() => accessor.GetDteAsync());
+
+            var debugger = dte.Debugger;
+            if (debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
+                return 0;
+
+            var processes = debugger.DebuggedProcesses;
+            if (processes == null || processes.Count == 0)
+                return 0;
+
+            return processes.Item(1).ProcessID;
+        }
+
+        private static AutomationElement FindFirstInProcess(int pid, Condition condition)
+        {
+            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+            var combined = new AndCondition(pidCondition, condition);
+            return AutomationElement.RootElement.FindFirst(TreeScope.Descendants, combined);
+        }
+
+        private static AutomationElementCollection FindAllInProcess(int pid, Condition condition)
+        {
+            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+            var combined = new AndCondition(pidCondition, condition);
+            return AutomationElement.RootElement.FindAll(TreeScope.Descendants, combined);
+        }
+
         #endregion
 
         #region UI Capture
@@ -300,9 +330,9 @@ namespace VsMcp.Extension.Tools
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+                var pid = GetDebuggeeProcessId(accessor);
+                if (pid == 0)
+                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
                 var conditions = new List<Condition>();
 
@@ -325,7 +355,7 @@ namespace VsMcp.Extension.Tools
                 else
                     condition = new AndCondition(conditions.ToArray());
 
-                var elements = root.FindAll(TreeScope.Descendants, condition);
+                var elements = FindAllInProcess(pid, condition);
                 var results = new List<object>();
 
                 foreach (AutomationElement element in elements)
@@ -353,12 +383,12 @@ namespace VsMcp.Extension.Tools
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+                var pid = GetDebuggeeProcessId(accessor);
+                if (pid == 0)
+                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
                 var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
+                var element = FindFirstInProcess(pid, condition);
 
                 if (element == null)
                     return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
@@ -424,12 +454,12 @@ namespace VsMcp.Extension.Tools
             {
                 if (!string.IsNullOrEmpty(automationId))
                 {
-                    var root = GetRootAutomationElement(accessor);
-                    if (root == null)
-                        return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+                    var pid = GetDebuggeeProcessId(accessor);
+                    if (pid == 0)
+                        return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
                     var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                    var element = root.FindFirst(TreeScope.Descendants, condition);
+                    var element = FindFirstInProcess(pid, condition);
 
                     if (element == null)
                         return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
@@ -493,12 +523,12 @@ namespace VsMcp.Extension.Tools
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+                var pid = GetDebuggeeProcessId(accessor);
+                if (pid == 0)
+                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
                 var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
+                var element = FindFirstInProcess(pid, condition);
 
                 if (element == null)
                     return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
@@ -528,12 +558,12 @@ namespace VsMcp.Extension.Tools
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+                var pid = GetDebuggeeProcessId(accessor);
+                if (pid == 0)
+                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
                 var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
+                var element = FindFirstInProcess(pid, condition);
 
                 if (element == null)
                     return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
