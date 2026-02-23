@@ -50,6 +50,7 @@ namespace VsMcp.Extension.Tools
         #endregion
 
         private const int UiaTimeoutSeconds = 30;
+        private const int MaxImageDimension = 1920;
 
         private static Task<T> RunOnBackgroundSTAAsync<T>(Func<T> func)
         {
@@ -309,12 +310,36 @@ namespace VsMcp.Extension.Tools
             });
         }
 
+        private static Bitmap ResizeIfNeeded(Bitmap bitmap)
+        {
+            int w = bitmap.Width;
+            int h = bitmap.Height;
+            if (w <= MaxImageDimension && h <= MaxImageDimension)
+                return null;
+
+            double scale = Math.Min((double)MaxImageDimension / w, (double)MaxImageDimension / h);
+            int newW = (int)(w * scale);
+            int newH = (int)(h * scale);
+
+            var resized = new Bitmap(newW, newH, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(bitmap, 0, 0, newW, newH);
+            }
+            return resized;
+        }
+
         private static string BitmapToBase64(Bitmap bitmap)
         {
-            using (var ms = new MemoryStream())
+            using (var resized = ResizeIfNeeded(bitmap))
             {
-                bitmap.Save(ms, ImageFormat.Png);
-                return Convert.ToBase64String(ms.ToArray());
+                var target = resized ?? bitmap;
+                using (var ms = new MemoryStream())
+                {
+                    target.Save(ms, ImageFormat.Png);
+                    return Convert.ToBase64String(ms.ToArray());
+                }
             }
         }
 
