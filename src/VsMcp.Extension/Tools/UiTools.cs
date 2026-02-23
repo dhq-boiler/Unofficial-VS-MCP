@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using EnvDTE;
@@ -125,6 +126,7 @@ namespace VsMcp.Extension.Tools
                         .AddString("automationId", "AutomationId of the UI element to find")
                         .AddString("className", "ClassName of the UI element to find")
                         .AddString("controlType", "ControlType programmatic name (e.g. 'ControlType.Button')")
+                        .AddInteger("maxResults", "Maximum number of elements to return (default: 50)")
                         .Build()),
                 args => UiFindElementsAsync(accessor, args));
 
@@ -240,12 +242,6 @@ namespace VsMcp.Extension.Tools
             return AutomationElement.RootElement.FindFirst(TreeScope.Descendants, combined);
         }
 
-        private static AutomationElementCollection FindAllInProcess(int pid, Condition condition)
-        {
-            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
-            var combined = new AndCondition(pidCondition, condition);
-            return AutomationElement.RootElement.FindAll(TreeScope.Descendants, combined);
-        }
 
         #endregion
 
@@ -416,6 +412,10 @@ namespace VsMcp.Extension.Tools
             var automationId = args.Value<string>("automationId");
             var className = args.Value<string>("className");
             var controlType = args.Value<string>("controlType");
+            var maxResults = args.Value<int?>("maxResults") ?? 50;
+
+            if (maxResults < 1) maxResults = 1;
+            if (maxResults > 1000) maxResults = 1000;
 
             if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(automationId)
                 && string.IsNullOrEmpty(className) && string.IsNullOrEmpty(controlType))
@@ -427,54 +427,79 @@ namespace VsMcp.Extension.Tools
             if (pid == 0)
                 return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
-            try
+            // Pre-parse ControlType
+            ControlType ct = null;
+            if (!string.IsNullOrEmpty(controlType))
             {
-                return await RunUiaWithTimeoutAsync(() =>
+                ct = ParseControlType(controlType);
+                if (ct == null)
+                    return McpToolResult.Error($"Unknown ControlType: '{controlType}'");
+            }
+
+            var results = new List<Dictionary<string, object>>();
+            var resultsLock = new object();
+            var cts = new CancellationTokenSource();
+
+            var searchTask = RunOnBackgroundSTAAsync(() =>
+            {
+                // Find top-level windows for the target process
+                var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+                var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, pidCondition);
+
+                foreach (AutomationElement window in windows)
                 {
-                    var conditions = new List<Condition>();
+                    if (cts.Token.IsCancellationRequested)
+                        break;
 
-                    if (!string.IsNullOrEmpty(name))
-                        conditions.Add(new PropertyCondition(AutomationElement.NameProperty, name));
-                    if (!string.IsNullOrEmpty(automationId))
-                        conditions.Add(new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
-                    if (!string.IsNullOrEmpty(className))
-                        conditions.Add(new PropertyCondition(AutomationElement.ClassNameProperty, className));
-                    if (!string.IsNullOrEmpty(controlType))
+                    lock (resultsLock)
                     {
-                        var ct = ParseControlType(controlType);
-                        if (ct != null)
-                            conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ct));
+                        if (results.Count >= maxResults)
+                            break;
                     }
 
-                    Condition condition;
-                    if (conditions.Count == 1)
-                        condition = conditions[0];
-                    else
-                        condition = new AndCondition(conditions.ToArray());
+                    WalkAndFindElements(window,
+                        string.IsNullOrEmpty(name) ? null : name,
+                        string.IsNullOrEmpty(automationId) ? null : automationId,
+                        string.IsNullOrEmpty(className) ? null : className,
+                        ct,
+                        maxResults, results, resultsLock, cts.Token);
+                }
 
-                    var elements = FindAllInProcess(pid, condition);
-                    var results = new List<object>();
+                return true;
+            });
 
-                    foreach (AutomationElement element in elements)
-                    {
-                        try
-                        {
-                            results.Add(BuildElementInfo(element));
-                        }
-                        catch { }
-                    }
-
-                    return McpToolResult.Success(new
-                    {
-                        count = results.Count,
-                        elements = results
-                    });
-                });
-            }
-            catch (TimeoutException ex)
+            bool timedOut = false;
+            if (await Task.WhenAny(searchTask, Task.Delay(TimeSpan.FromSeconds(UiaTimeoutSeconds))) != searchTask)
             {
-                return McpToolResult.Error(ex.Message);
+                // Timed out — cancel the walk and use partial results
+                cts.Cancel();
+                timedOut = true;
             }
+            else
+            {
+                // Propagate exceptions from the search task
+                await searchTask;
+            }
+
+            List<Dictionary<string, object>> snapshot;
+            lock (resultsLock)
+            {
+                snapshot = new List<Dictionary<string, object>>(results);
+            }
+
+            if (timedOut && snapshot.Count == 0)
+            {
+                return McpToolResult.Error(
+                    $"UI Automation timed out after {UiaTimeoutSeconds} seconds with no results found. The target application may have a complex UI tree.");
+            }
+
+            return McpToolResult.Success(new
+            {
+                count = snapshot.Count,
+                elements = snapshot,
+                timedOut,
+                maxResults
+            });
         }
 
         private static async Task<McpToolResult> UiGetElementAsync(VsServiceAccessor accessor, JObject args)
@@ -964,6 +989,83 @@ namespace VsMcp.Extension.Tools
             }
 
             return info;
+        }
+
+        private static bool MatchesCriteria(AutomationElement element,
+            string name, string automationId, string className, ControlType controlType)
+        {
+            try
+            {
+                if (name != null && element.Current.Name != name)
+                    return false;
+                if (automationId != null && element.Current.AutomationId != automationId)
+                    return false;
+                if (className != null && element.Current.ClassName != className)
+                    return false;
+                if (controlType != null && !Equals(element.Current.ControlType, controlType))
+                    return false;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void WalkAndFindElements(
+            AutomationElement element,
+            string name, string automationId, string className, ControlType controlType,
+            int maxResults, List<Dictionary<string, object>> results, object resultsLock,
+            CancellationToken ct)
+        {
+            if (ct.IsCancellationRequested)
+                return;
+
+            if (MatchesCriteria(element, name, automationId, className, controlType))
+            {
+                try
+                {
+                    var info = BuildElementInfo(element);
+                    lock (resultsLock)
+                    {
+                        if (results.Count >= maxResults)
+                            return;
+                        results.Add(info);
+                        if (results.Count >= maxResults)
+                            return;
+                    }
+                }
+                catch { }
+            }
+
+            // Check again before descending
+            lock (resultsLock)
+            {
+                if (results.Count >= maxResults)
+                    return;
+            }
+
+            try
+            {
+                var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
+                while (child != null)
+                {
+                    if (ct.IsCancellationRequested)
+                        return;
+
+                    lock (resultsLock)
+                    {
+                        if (results.Count >= maxResults)
+                            return;
+                    }
+
+                    WalkAndFindElements(child, name, automationId, className, controlType,
+                        maxResults, results, resultsLock, ct);
+
+                    child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                }
+            }
+            catch { }
         }
 
         private static ControlType ParseControlType(string controlTypeName)
