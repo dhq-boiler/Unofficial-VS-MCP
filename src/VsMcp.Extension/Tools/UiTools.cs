@@ -45,6 +45,8 @@ namespace VsMcp.Extension.Tools
 
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
         private const uint PW_RENDERFULLCONTENT = 0x00000002;
 
         #endregion
@@ -147,6 +149,19 @@ namespace VsMcp.Extension.Tools
                         .AddInteger("waitMs", "Milliseconds to wait after clicking (default: 0)")
                         .Build()),
                 args => UiClickAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "ui_right_click",
+                    "Right-click a UI element by AutomationId, Name, or screen coordinates to open context menus",
+                    SchemaBuilder.Create()
+                        .AddString("automationId", "AutomationId of the UI element to right-click")
+                        .AddString("name", "Name of the UI element to right-click (used if automationId is not provided)")
+                        .AddInteger("x", "Screen X coordinate to right-click (used if automationId and name are not provided)")
+                        .AddInteger("y", "Screen Y coordinate to right-click (used if automationId and name are not provided)")
+                        .AddInteger("waitMs", "Milliseconds to wait after right-clicking (default: 0)")
+                        .Build()),
+                args => UiRightClickAsync(accessor, args));
 
             registry.Register(
                 new McpToolDefinition(
@@ -706,6 +721,68 @@ namespace VsMcp.Extension.Tools
             }
         }
 
+        private static async Task<McpToolResult> UiRightClickAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var automationId = args.Value<string>("automationId");
+            var name = args.Value<string>("name");
+            var x = args.Value<int?>("x");
+            var y = args.Value<int?>("y");
+            var waitMs = args.Value<int?>("waitMs") ?? 0;
+
+            if (string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(name) && (!x.HasValue || !y.HasValue))
+                return McpToolResult.Error("Either 'automationId', 'name', or both 'x' and 'y' coordinates are required");
+
+            int clickX, clickY;
+
+            if (!string.IsNullOrEmpty(automationId) || !string.IsNullOrEmpty(name))
+            {
+                try
+                {
+                    var coords = await ResolveElementCoordinatesAsync(accessor, automationId, name);
+                    if (coords == null)
+                    {
+                        var desc = !string.IsNullOrEmpty(automationId)
+                            ? $"AutomationId '{automationId}'"
+                            : $"Name '{name}'";
+                        return McpToolResult.Error($"Element with {desc} not found or has no bounding rectangle. Make sure debugging is active.");
+                    }
+                    clickX = coords.Value.x;
+                    clickY = coords.Value.y;
+                }
+                catch (TimeoutException ex)
+                {
+                    return McpToolResult.Error(ex.Message);
+                }
+            }
+            else
+            {
+                clickX = x.Value;
+                clickY = y.Value;
+            }
+
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+
+            await Task.Run(() =>
+            {
+                if (hwnd != IntPtr.Zero)
+                    SetForegroundWindow(hwnd);
+
+                PerformRightClick(clickX, clickY);
+            });
+
+            var result = McpToolResult.Success(new
+            {
+                message = $"Right-clicked at ({clickX}, {clickY})",
+                x = clickX,
+                y = clickY
+            });
+
+            if (waitMs > 0)
+                await Task.Delay(Math.Min(waitMs, 10000));
+
+            return result;
+        }
+
         #endregion
 
         #region Helpers
@@ -715,6 +792,46 @@ namespace VsMcp.Extension.Tools
             SetCursorPos(x, y);
             mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static void PerformRightClick(int x, int y)
+        {
+            SetCursorPos(x, y);
+            mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static async Task<(int x, int y)?> ResolveElementCoordinatesAsync(
+            VsServiceAccessor accessor, string automationId, string name)
+        {
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return null;
+
+            return await RunUiaWithTimeoutAsync(() =>
+            {
+                AutomationElement element = null;
+
+                if (!string.IsNullOrEmpty(automationId))
+                {
+                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                    element = FindFirstInProcess(pid, condition);
+                }
+                else if (!string.IsNullOrEmpty(name))
+                {
+                    var condition = new PropertyCondition(AutomationElement.NameProperty, name);
+                    element = FindFirstInProcess(pid, condition);
+                }
+
+                if (element == null)
+                    return ((int, int)?)null;
+
+                var bounds = element.Current.BoundingRectangle;
+                if (bounds.IsEmpty)
+                    return null;
+
+                return ((int)(bounds.X + bounds.Width / 2), (int)(bounds.Y + bounds.Height / 2));
+            });
         }
 
         private static Dictionary<string, object> BuildElementInfo(AutomationElement element)
