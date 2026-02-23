@@ -860,6 +860,15 @@ namespace VsMcp.Extension.Tools
 
             var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
 
+            // Validate both start and end coordinates
+            var startError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, startX, startY));
+            if (startError != null)
+                return McpToolResult.Error(startError);
+
+            var endError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, endX, endY));
+            if (endError != null)
+                return McpToolResult.Error(endError);
+
             await Task.Run(() =>
             {
                 if (hwnd != IntPtr.Zero)
