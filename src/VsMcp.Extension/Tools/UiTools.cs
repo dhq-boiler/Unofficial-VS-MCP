@@ -603,6 +603,10 @@ namespace VsMcp.Extension.Tools
                 // Click at screen coordinates - DTE on UI thread, P/Invoke on Task.Run
                 var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
 
+                var boundsError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, x.Value, y.Value));
+                if (boundsError != null)
+                    return McpToolResult.Error(boundsError);
+
                 await Task.Run(() =>
                 {
                     if (hwnd != IntPtr.Zero)
@@ -661,6 +665,14 @@ namespace VsMcp.Extension.Tools
                     {
                         int clickX = (int)(bounds.X + bounds.Width / 2);
                         int clickY = (int)(bounds.Y + bounds.Height / 2);
+
+                        // Validate coordinates are within the debuggee window
+                        var proc = System.Diagnostics.Process.GetProcessById(pid);
+                        var mainHwnd = proc.MainWindowHandle;
+                        var boundsError = ValidateCoordinatesInWindow(mainHwnd, clickX, clickY);
+                        if (boundsError != null)
+                            return McpToolResult.Error(boundsError);
+
                         PerformClick(clickX, clickY);
                         return McpToolResult.Success(new
                         {
@@ -870,6 +882,20 @@ namespace VsMcp.Extension.Tools
         #endregion
 
         #region Helpers
+
+        private static string ValidateCoordinatesInWindow(IntPtr hwnd, int x, int y)
+        {
+            if (hwnd == IntPtr.Zero)
+                return null; // No window to validate against
+
+            if (!GetWindowRect(hwnd, out RECT rect))
+                return null; // Can't get rect, skip validation
+
+            if (x >= rect.Left && x <= rect.Right && y >= rect.Top && y <= rect.Bottom)
+                return null; // Inside window bounds
+
+            return $"Coordinates ({x}, {y}) are outside the debugged application's window bounds ({rect.Left},{rect.Top} - {rect.Right},{rect.Bottom}). Click was not performed to prevent interacting with unintended applications.";
+        }
 
         private static void PerformClick(int x, int y)
         {
