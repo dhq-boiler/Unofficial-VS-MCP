@@ -49,6 +49,37 @@ namespace VsMcp.Extension.Tools
 
         #endregion
 
+        private const int UiaTimeoutSeconds = 30;
+        private const int MaxImageDimension = 1920;
+
+        private static Task<T> RunOnBackgroundSTAAsync<T>(Func<T> func)
+        {
+            var tcs = new TaskCompletionSource<T>();
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    tcs.SetResult(func());
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+            return tcs.Task;
+        }
+
+        private static async Task<T> RunUiaWithTimeoutAsync<T>(Func<T> func)
+        {
+            var task = RunOnBackgroundSTAAsync(func);
+            if (await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(UiaTimeoutSeconds))) != task)
+                throw new TimeoutException($"UI Automation timed out after {UiaTimeoutSeconds} seconds. The target application may not be responding.");
+            return await task;
+        }
+
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
             // UI Capture tools
@@ -153,18 +184,48 @@ namespace VsMcp.Extension.Tools
             return proc.MainWindowHandle;
         }
 
+        private static int GetDebuggeeProcessId(VsServiceAccessor accessor)
+        {
+            var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                .Run(() => accessor.GetDteAsync());
+
+            var debugger = dte.Debugger;
+            if (debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
+                return 0;
+
+            var processes = debugger.DebuggedProcesses;
+            if (processes == null || processes.Count == 0)
+                return 0;
+
+            return processes.Item(1).ProcessID;
+        }
+
+        private static AutomationElement FindFirstInProcess(int pid, Condition condition)
+        {
+            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+            var combined = new AndCondition(pidCondition, condition);
+            return AutomationElement.RootElement.FindFirst(TreeScope.Descendants, combined);
+        }
+
+        private static AutomationElementCollection FindAllInProcess(int pid, Condition condition)
+        {
+            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+            var combined = new AndCondition(pidCondition, condition);
+            return AutomationElement.RootElement.FindAll(TreeScope.Descendants, combined);
+        }
+
         #endregion
 
         #region UI Capture
 
         private static async Task<McpToolResult> UiCaptureWindowAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var hwnd = GetDebuggeeWindowHandle(accessor);
-                if (hwnd == IntPtr.Zero)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+            if (hwnd == IntPtr.Zero)
+                return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
 
+            return await Task.Run(() =>
+            {
                 if (!GetWindowRect(hwnd, out RECT rect))
                     return McpToolResult.Error("Failed to get window rectangle");
 
@@ -198,12 +259,12 @@ namespace VsMcp.Extension.Tools
             if (width <= 0 || height <= 0)
                 return McpToolResult.Error("Width and height must be positive values");
 
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var hwnd = GetDebuggeeWindowHandle(accessor);
-                if (hwnd == IntPtr.Zero)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+            if (hwnd == IntPtr.Zero)
+                return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
 
+            return await Task.Run(() =>
+            {
                 if (!GetWindowRect(hwnd, out RECT rect))
                     return McpToolResult.Error("Failed to get window rectangle");
 
@@ -249,12 +310,36 @@ namespace VsMcp.Extension.Tools
             });
         }
 
+        private static Bitmap ResizeIfNeeded(Bitmap bitmap)
+        {
+            int w = bitmap.Width;
+            int h = bitmap.Height;
+            if (w <= MaxImageDimension && h <= MaxImageDimension)
+                return null;
+
+            double scale = Math.Min((double)MaxImageDimension / w, (double)MaxImageDimension / h);
+            int newW = (int)(w * scale);
+            int newH = (int)(h * scale);
+
+            var resized = new Bitmap(newW, newH, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(bitmap, 0, 0, newW, newH);
+            }
+            return resized;
+        }
+
         private static string BitmapToBase64(Bitmap bitmap)
         {
-            using (var ms = new MemoryStream())
+            using (var resized = ResizeIfNeeded(bitmap))
             {
-                bitmap.Save(ms, ImageFormat.Png);
-                return Convert.ToBase64String(ms.ToArray());
+                var target = resized ?? bitmap;
+                using (var ms = new MemoryStream())
+                {
+                    target.Save(ms, ImageFormat.Png);
+                    return Convert.ToBase64String(ms.ToArray());
+                }
             }
         }
 
@@ -262,27 +347,27 @@ namespace VsMcp.Extension.Tools
 
         #region UI Automation
 
-        private static AutomationElement GetRootAutomationElement(VsServiceAccessor accessor)
-        {
-            var hwnd = GetDebuggeeWindowHandle(accessor);
-            if (hwnd == IntPtr.Zero)
-                return null;
-            return AutomationElement.FromHandle(hwnd);
-        }
-
         private static async Task<McpToolResult> UiGetTreeAsync(VsServiceAccessor accessor, JObject args)
         {
             var maxDepth = args.Value<int?>("depth") ?? 3;
 
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+            if (hwnd == IntPtr.Zero)
+                return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
 
-                var tree = BuildElementTree(root, 0, maxDepth);
+            try
+            {
+                var tree = await RunUiaWithTimeoutAsync(() =>
+                {
+                    var root = AutomationElement.FromHandle(hwnd);
+                    return BuildElementTree(root, 0, maxDepth);
+                });
                 return McpToolResult.Success(tree);
-            });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
+            }
         }
 
         private static async Task<McpToolResult> UiFindElementsAsync(VsServiceAccessor accessor, JObject args)
@@ -298,51 +383,58 @@ namespace VsMcp.Extension.Tools
                 return McpToolResult.Error("At least one search criterion must be provided (name, automationId, className, or controlType)");
             }
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
-
-                var conditions = new List<Condition>();
-
-                if (!string.IsNullOrEmpty(name))
-                    conditions.Add(new PropertyCondition(AutomationElement.NameProperty, name));
-                if (!string.IsNullOrEmpty(automationId))
-                    conditions.Add(new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
-                if (!string.IsNullOrEmpty(className))
-                    conditions.Add(new PropertyCondition(AutomationElement.ClassNameProperty, className));
-                if (!string.IsNullOrEmpty(controlType))
+                return await RunUiaWithTimeoutAsync(() =>
                 {
-                    var ct = ParseControlType(controlType);
-                    if (ct != null)
-                        conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ct));
-                }
+                    var conditions = new List<Condition>();
 
-                Condition condition;
-                if (conditions.Count == 1)
-                    condition = conditions[0];
-                else
-                    condition = new AndCondition(conditions.ToArray());
-
-                var elements = root.FindAll(TreeScope.Descendants, condition);
-                var results = new List<object>();
-
-                foreach (AutomationElement element in elements)
-                {
-                    try
+                    if (!string.IsNullOrEmpty(name))
+                        conditions.Add(new PropertyCondition(AutomationElement.NameProperty, name));
+                    if (!string.IsNullOrEmpty(automationId))
+                        conditions.Add(new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
+                    if (!string.IsNullOrEmpty(className))
+                        conditions.Add(new PropertyCondition(AutomationElement.ClassNameProperty, className));
+                    if (!string.IsNullOrEmpty(controlType))
                     {
-                        results.Add(BuildElementInfo(element));
+                        var ct = ParseControlType(controlType);
+                        if (ct != null)
+                            conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ct));
                     }
-                    catch { }
-                }
 
-                return McpToolResult.Success(new
-                {
-                    count = results.Count,
-                    elements = results
+                    Condition condition;
+                    if (conditions.Count == 1)
+                        condition = conditions[0];
+                    else
+                        condition = new AndCondition(conditions.ToArray());
+
+                    var elements = FindAllInProcess(pid, condition);
+                    var results = new List<object>();
+
+                    foreach (AutomationElement element in elements)
+                    {
+                        try
+                        {
+                            results.Add(BuildElementInfo(element));
+                        }
+                        catch { }
+                    }
+
+                    return McpToolResult.Success(new
+                    {
+                        count = results.Count,
+                        elements = results
+                    });
                 });
-            });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
+            }
         }
 
         private static async Task<McpToolResult> UiGetElementAsync(VsServiceAccessor accessor, JObject args)
@@ -351,64 +443,71 @@ namespace VsMcp.Extension.Tools
             if (string.IsNullOrEmpty(automationId))
                 return McpToolResult.Error("Parameter 'automationId' is required");
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
-
-                var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
-
-                if (element == null)
-                    return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                var info = BuildElementInfo(element);
-
-                // Add supported patterns
-                var patterns = new List<string>();
-                foreach (var pattern in element.GetSupportedPatterns())
+                return await RunUiaWithTimeoutAsync(() =>
                 {
-                    patterns.Add(pattern.ProgrammaticName);
-                }
-                info["supportedPatterns"] = patterns;
+                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                    var element = FindFirstInProcess(pid, condition);
 
-                // Add value if ValuePattern is supported
-                try
-                {
-                    if (element.TryGetCurrentPattern(ValuePattern.Pattern, out object valPattern))
+                    if (element == null)
+                        return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
+
+                    var info = BuildElementInfo(element);
+
+                    // Add supported patterns
+                    var patterns = new List<string>();
+                    foreach (var pattern in element.GetSupportedPatterns())
                     {
-                        var vp = (ValuePattern)valPattern;
-                        info["value"] = vp.Current.Value;
-                        info["isReadOnly"] = vp.Current.IsReadOnly;
+                        patterns.Add(pattern.ProgrammaticName);
                     }
-                }
-                catch { }
+                    info["supportedPatterns"] = patterns;
 
-                // Add toggle state if TogglePattern is supported
-                try
-                {
-                    if (element.TryGetCurrentPattern(TogglePattern.Pattern, out object togPattern))
+                    // Add value if ValuePattern is supported
+                    try
                     {
-                        var tp = (TogglePattern)togPattern;
-                        info["toggleState"] = tp.Current.ToggleState.ToString();
+                        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out object valPattern))
+                        {
+                            var vp = (ValuePattern)valPattern;
+                            info["value"] = vp.Current.Value;
+                            info["isReadOnly"] = vp.Current.IsReadOnly;
+                        }
                     }
-                }
-                catch { }
+                    catch { }
 
-                // Add selection state if SelectionItemPattern is supported
-                try
-                {
-                    if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out object selPattern))
+                    // Add toggle state if TogglePattern is supported
+                    try
                     {
-                        var sp = (SelectionItemPattern)selPattern;
-                        info["isSelected"] = sp.Current.IsSelected;
+                        if (element.TryGetCurrentPattern(TogglePattern.Pattern, out object togPattern))
+                        {
+                            var tp = (TogglePattern)togPattern;
+                            info["toggleState"] = tp.Current.ToggleState.ToString();
+                        }
                     }
-                }
-                catch { }
+                    catch { }
 
-                return McpToolResult.Success(info);
-            });
+                    // Add selection state if SelectionItemPattern is supported
+                    try
+                    {
+                        if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out object selPattern))
+                        {
+                            var sp = (SelectionItemPattern)selPattern;
+                            info["isSelected"] = sp.Current.IsSelected;
+                        }
+                    }
+                    catch { }
+
+                    return McpToolResult.Success(info);
+                });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
+            }
         }
 
         private static async Task<McpToolResult> UiClickAsync(VsServiceAccessor accessor, JObject args)
@@ -420,65 +519,77 @@ namespace VsMcp.Extension.Tools
             if (string.IsNullOrEmpty(automationId) && (!x.HasValue || !y.HasValue))
                 return McpToolResult.Error("Either 'automationId' or both 'x' and 'y' coordinates are required");
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            if (!string.IsNullOrEmpty(automationId))
             {
-                if (!string.IsNullOrEmpty(automationId))
+                var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+                if (pid == 0)
+                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+                try
                 {
-                    var root = GetRootAutomationElement(accessor);
-                    if (root == null)
-                        return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
-
-                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                    var element = root.FindFirst(TreeScope.Descendants, condition);
-
-                    if (element == null)
-                        return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                    // Try InvokePattern first
-                    if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
+                    return await RunUiaWithTimeoutAsync(() =>
                     {
-                        ((InvokePattern)invokeObj).Invoke();
-                        return McpToolResult.Success(new
-                        {
-                            message = $"Clicked element '{automationId}' using InvokePattern",
-                            automationId
-                        });
-                    }
+                        var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                        var element = FindFirstInProcess(pid, condition);
 
-                    // Fall back to clicking at the center of the element's bounding rectangle
-                    var bounds = element.Current.BoundingRectangle;
-                    if (!bounds.IsEmpty)
-                    {
-                        int clickX = (int)(bounds.X + bounds.Width / 2);
-                        int clickY = (int)(bounds.Y + bounds.Height / 2);
-                        PerformClick(clickX, clickY);
-                        return McpToolResult.Success(new
-                        {
-                            message = $"Clicked element '{automationId}' at ({clickX}, {clickY})",
-                            automationId,
-                            clickX,
-                            clickY
-                        });
-                    }
+                        if (element == null)
+                            return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
 
-                    return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern and has no bounding rectangle");
+                        // Try InvokePattern first
+                        if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
+                        {
+                            ((InvokePattern)invokeObj).Invoke();
+                            return McpToolResult.Success(new
+                            {
+                                message = $"Clicked element '{automationId}' using InvokePattern",
+                                automationId
+                            });
+                        }
+
+                        // Fall back to clicking at the center of the element's bounding rectangle
+                        var bounds = element.Current.BoundingRectangle;
+                        if (!bounds.IsEmpty)
+                        {
+                            int clickX = (int)(bounds.X + bounds.Width / 2);
+                            int clickY = (int)(bounds.Y + bounds.Height / 2);
+                            PerformClick(clickX, clickY);
+                            return McpToolResult.Success(new
+                            {
+                                message = $"Clicked element '{automationId}' at ({clickX}, {clickY})",
+                                automationId,
+                                clickX,
+                                clickY
+                            });
+                        }
+
+                        return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern and has no bounding rectangle");
+                    });
                 }
-                else
+                catch (TimeoutException ex)
                 {
-                    // Click at screen coordinates
-                    var hwnd = GetDebuggeeWindowHandle(accessor);
+                    return McpToolResult.Error(ex.Message);
+                }
+            }
+            else
+            {
+                // Click at screen coordinates - DTE on UI thread, P/Invoke on Task.Run
+                var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+
+                await Task.Run(() =>
+                {
                     if (hwnd != IntPtr.Zero)
                         SetForegroundWindow(hwnd);
 
                     PerformClick(x.Value, y.Value);
-                    return McpToolResult.Success(new
-                    {
-                        message = $"Clicked at screen coordinates ({x.Value}, {y.Value})",
-                        x = x.Value,
-                        y = y.Value
-                    });
-                }
-            });
+                });
+
+                return McpToolResult.Success(new
+                {
+                    message = $"Clicked at screen coordinates ({x.Value}, {y.Value})",
+                    x = x.Value,
+                    y = y.Value
+                });
+            }
         }
 
         private static async Task<McpToolResult> UiSetValueAsync(VsServiceAccessor accessor, JObject args)
@@ -491,33 +602,40 @@ namespace VsMcp.Extension.Tools
             if (value == null)
                 return McpToolResult.Error("Parameter 'value' is required");
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
-
-                var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
-
-                if (element == null)
-                    return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                if (!element.TryGetCurrentPattern(ValuePattern.Pattern, out object patternObj))
-                    return McpToolResult.Error($"Element '{automationId}' does not support ValuePattern");
-
-                var valuePattern = (ValuePattern)patternObj;
-                if (valuePattern.Current.IsReadOnly)
-                    return McpToolResult.Error($"Element '{automationId}' is read-only");
-
-                valuePattern.SetValue(value);
-                return McpToolResult.Success(new
+                return await RunUiaWithTimeoutAsync(() =>
                 {
-                    message = $"Set value of '{automationId}' to '{value}'",
-                    automationId,
-                    value
+                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                    var element = FindFirstInProcess(pid, condition);
+
+                    if (element == null)
+                        return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
+
+                    if (!element.TryGetCurrentPattern(ValuePattern.Pattern, out object patternObj))
+                        return McpToolResult.Error($"Element '{automationId}' does not support ValuePattern");
+
+                    var valuePattern = (ValuePattern)patternObj;
+                    if (valuePattern.Current.IsReadOnly)
+                        return McpToolResult.Error($"Element '{automationId}' is read-only");
+
+                    valuePattern.SetValue(value);
+                    return McpToolResult.Success(new
+                    {
+                        message = $"Set value of '{automationId}' to '{value}'",
+                        automationId,
+                        value
+                    });
                 });
-            });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
+            }
         }
 
         private static async Task<McpToolResult> UiInvokeAsync(VsServiceAccessor accessor, JObject args)
@@ -526,28 +644,35 @@ namespace VsMcp.Extension.Tools
             if (string.IsNullOrEmpty(automationId))
                 return McpToolResult.Error("Parameter 'automationId' is required");
 
-            return await accessor.RunOnUIThreadAsync(() =>
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
             {
-                var root = GetRootAutomationElement(accessor);
-                if (root == null)
-                    return McpToolResult.Error("No debugged process found or it has no visible window. Make sure debugging is active.");
-
-                var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                var element = root.FindFirst(TreeScope.Descendants, condition);
-
-                if (element == null)
-                    return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                if (!element.TryGetCurrentPattern(InvokePattern.Pattern, out object patternObj))
-                    return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern");
-
-                ((InvokePattern)patternObj).Invoke();
-                return McpToolResult.Success(new
+                return await RunUiaWithTimeoutAsync(() =>
                 {
-                    message = $"Invoked element '{automationId}'",
-                    automationId
+                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                    var element = FindFirstInProcess(pid, condition);
+
+                    if (element == null)
+                        return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
+
+                    if (!element.TryGetCurrentPattern(InvokePattern.Pattern, out object patternObj))
+                        return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern");
+
+                    ((InvokePattern)patternObj).Invoke();
+                    return McpToolResult.Success(new
+                    {
+                        message = $"Invoked element '{automationId}'",
+                        automationId
+                    });
                 });
-            });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
+            }
         }
 
         #endregion

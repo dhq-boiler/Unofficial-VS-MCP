@@ -303,7 +303,9 @@ namespace VsMcp.StdioProxy
                 message += "No Visual Studio installations detected.\n";
             }
 
-            message += "Ask the user which version to start. Use PowerShell Start-Process (NOT cmd).\n"
+            message += "You MUST first ask the user which Visual Studio version and edition to use BEFORE starting it. NEVER assume or guess the VS version/edition — multiple versions may be installed.\n"
+                + "NEVER guess solution (.sln) file names — use Glob (*.sln) to verify the exact file name before passing it to devenv.exe.\n"
+                + "Use PowerShell Start-Process with the exact devenv.exe path (NOT cmd).\n"
                 + "After starting VS, wait 30 seconds, then retry.";
 
             var errorResult = new JObject
