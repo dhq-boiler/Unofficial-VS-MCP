@@ -132,7 +132,12 @@ namespace VsMcp.Extension.McpServer
                         return;
                     }
 
+                    var method = rpcRequest.Method ?? "(null)";
+                    McpRequestRouter.Log($"[HTTP] >>> {method} id={rpcRequest.Id} - routing start");
+
                     var rpcResponse = await _router.RouteAsync(rpcRequest);
+
+                    McpRequestRouter.Log($"[HTTP] <<< {method} id={rpcRequest.Id} - routing done, response={(rpcResponse != null ? "yes" : "null")}");
 
                     if (rpcResponse == null)
                     {
@@ -145,7 +150,9 @@ namespace VsMcp.Extension.McpServer
                     {
                         NullValueHandling = NullValueHandling.Ignore
                     });
+                    McpRequestRouter.Log($"[HTTP] <<< {method} id={rpcRequest.Id} - writing {jsonResponse.Length} bytes");
                     await WriteResponseAsync(response, 200, jsonResponse);
+                    McpRequestRouter.Log($"[HTTP] <<< {method} id={rpcRequest.Id} - write complete");
                     return;
                 }
 

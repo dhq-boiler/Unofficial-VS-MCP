@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using EnvDTE;
@@ -45,6 +46,8 @@ namespace VsMcp.Extension.Tools
 
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
         private const uint PW_RENDERFULLCONTENT = 0x00000002;
 
         #endregion
@@ -109,6 +112,8 @@ namespace VsMcp.Extension.Tools
                     "Get the UI element tree of the debugged application's main window",
                     SchemaBuilder.Create()
                         .AddInteger("depth", "Maximum depth of the tree (default: 3)")
+                        .AddInteger("maxChildren", "Maximum number of child elements to enumerate per node (default: 50)")
+                        .AddInteger("maxElements", "Maximum total number of elements in the tree (default: 500)")
                         .Build()),
                 args => UiGetTreeAsync(accessor, args));
 
@@ -121,6 +126,7 @@ namespace VsMcp.Extension.Tools
                         .AddString("automationId", "AutomationId of the UI element to find")
                         .AddString("className", "ClassName of the UI element to find")
                         .AddString("controlType", "ControlType programmatic name (e.g. 'ControlType.Button')")
+                        .AddInteger("maxResults", "Maximum number of elements to return (default: 50)")
                         .Build()),
                 args => UiFindElementsAsync(accessor, args));
 
@@ -136,13 +142,42 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "ui_click",
-                    "Click a UI element by AutomationId (using InvokePattern) or by screen coordinates",
+                    "Click a UI element by AutomationId, Name, or screen coordinates",
                     SchemaBuilder.Create()
                         .AddString("automationId", "AutomationId of the UI element to click")
-                        .AddInteger("x", "Screen X coordinate to click (used if automationId is not provided)")
-                        .AddInteger("y", "Screen Y coordinate to click (used if automationId is not provided)")
+                        .AddString("name", "Name of the UI element to click (used if automationId is not provided)")
+                        .AddInteger("x", "Screen X coordinate to click (used if automationId and name are not provided)")
+                        .AddInteger("y", "Screen Y coordinate to click (used if automationId and name are not provided)")
+                        .AddInteger("waitMs", "Milliseconds to wait after clicking (default: 0)")
                         .Build()),
                 args => UiClickAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "ui_right_click",
+                    "Right-click a UI element by AutomationId, Name, or screen coordinates to open context menus",
+                    SchemaBuilder.Create()
+                        .AddString("automationId", "AutomationId of the UI element to right-click")
+                        .AddString("name", "Name of the UI element to right-click (used if automationId is not provided)")
+                        .AddInteger("x", "Screen X coordinate to right-click (used if automationId and name are not provided)")
+                        .AddInteger("y", "Screen Y coordinate to right-click (used if automationId and name are not provided)")
+                        .AddInteger("waitMs", "Milliseconds to wait after right-clicking (default: 0)")
+                        .Build()),
+                args => UiRightClickAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "ui_drag",
+                    "Perform a drag-and-drop operation from start coordinates to end coordinates",
+                    SchemaBuilder.Create()
+                        .AddInteger("startX", "Screen X coordinate of the drag start point", required: true)
+                        .AddInteger("startY", "Screen Y coordinate of the drag start point", required: true)
+                        .AddInteger("endX", "Screen X coordinate of the drag end point", required: true)
+                        .AddInteger("endY", "Screen Y coordinate of the drag end point", required: true)
+                        .AddInteger("steps", "Number of intermediate move steps (default: 10)")
+                        .AddInteger("delayMs", "Milliseconds to wait between each step (default: 10)")
+                        .Build()),
+                args => UiDragAsync(accessor, args));
 
             registry.Register(
                 new McpToolDefinition(
@@ -207,12 +242,6 @@ namespace VsMcp.Extension.Tools
             return AutomationElement.RootElement.FindFirst(TreeScope.Descendants, combined);
         }
 
-        private static AutomationElementCollection FindAllInProcess(int pid, Condition condition)
-        {
-            var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
-            var combined = new AndCondition(pidCondition, condition);
-            return AutomationElement.RootElement.FindAll(TreeScope.Descendants, combined);
-        }
 
         #endregion
 
@@ -350,6 +379,8 @@ namespace VsMcp.Extension.Tools
         private static async Task<McpToolResult> UiGetTreeAsync(VsServiceAccessor accessor, JObject args)
         {
             var maxDepth = args.Value<int?>("depth") ?? 3;
+            var maxChildren = args.Value<int?>("maxChildren") ?? 50;
+            var maxElements = args.Value<int?>("maxElements") ?? 500;
 
             var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
             if (hwnd == IntPtr.Zero)
@@ -357,12 +388,17 @@ namespace VsMcp.Extension.Tools
 
             try
             {
+                int elementCount = 0;
+                var capturedCount = 0;
                 var tree = await RunUiaWithTimeoutAsync(() =>
                 {
                     var root = AutomationElement.FromHandle(hwnd);
-                    return BuildElementTree(root, 0, maxDepth);
+                    var result = BuildElementTree(root, 0, maxDepth,
+                        maxChildren, maxElements, ref elementCount);
+                    capturedCount = elementCount;
+                    return result;
                 });
-                return McpToolResult.Success(tree);
+                return McpToolResult.Success(new { tree, totalElements = capturedCount });
             }
             catch (TimeoutException ex)
             {
@@ -376,6 +412,10 @@ namespace VsMcp.Extension.Tools
             var automationId = args.Value<string>("automationId");
             var className = args.Value<string>("className");
             var controlType = args.Value<string>("controlType");
+            var maxResults = args.Value<int?>("maxResults") ?? 50;
+
+            if (maxResults < 1) maxResults = 1;
+            if (maxResults > 1000) maxResults = 1000;
 
             if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(automationId)
                 && string.IsNullOrEmpty(className) && string.IsNullOrEmpty(controlType))
@@ -383,58 +423,95 @@ namespace VsMcp.Extension.Tools
                 return McpToolResult.Error("At least one search criterion must be provided (name, automationId, className, or controlType)");
             }
 
+            McpServer.McpRequestRouter.Log("[FindElements] getting PID via RunOnUIThreadAsync...");
             var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            McpServer.McpRequestRouter.Log($"[FindElements] PID={pid}");
             if (pid == 0)
                 return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
-            try
+            // Pre-parse ControlType
+            ControlType ct = null;
+            if (!string.IsNullOrEmpty(controlType))
             {
-                return await RunUiaWithTimeoutAsync(() =>
+                ct = ParseControlType(controlType);
+                if (ct == null)
+                    return McpToolResult.Error($"Unknown ControlType: '{controlType}'");
+            }
+
+            var results = new List<Dictionary<string, object>>();
+            var resultsLock = new object();
+            var cts = new CancellationTokenSource();
+
+            McpServer.McpRequestRouter.Log("[FindElements] starting STA search thread...");
+            var searchTask = RunOnBackgroundSTAAsync(() =>
+            {
+                McpServer.McpRequestRouter.Log("[FindElements STA] FindAll(TreeScope.Children) starting...");
+                // Find top-level windows for the target process
+                var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
+                var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, pidCondition);
+                McpServer.McpRequestRouter.Log($"[FindElements STA] FindAll done, {windows.Count} windows found");
+
+                foreach (AutomationElement window in windows)
                 {
-                    var conditions = new List<Condition>();
+                    if (cts.Token.IsCancellationRequested)
+                        break;
 
-                    if (!string.IsNullOrEmpty(name))
-                        conditions.Add(new PropertyCondition(AutomationElement.NameProperty, name));
-                    if (!string.IsNullOrEmpty(automationId))
-                        conditions.Add(new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
-                    if (!string.IsNullOrEmpty(className))
-                        conditions.Add(new PropertyCondition(AutomationElement.ClassNameProperty, className));
-                    if (!string.IsNullOrEmpty(controlType))
+                    lock (resultsLock)
                     {
-                        var ct = ParseControlType(controlType);
-                        if (ct != null)
-                            conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ct));
+                        if (results.Count >= maxResults)
+                            break;
                     }
 
-                    Condition condition;
-                    if (conditions.Count == 1)
-                        condition = conditions[0];
-                    else
-                        condition = new AndCondition(conditions.ToArray());
+                    McpServer.McpRequestRouter.Log("[FindElements STA] walking window tree...");
+                    WalkAndFindElements(window,
+                        string.IsNullOrEmpty(name) ? null : name,
+                        string.IsNullOrEmpty(automationId) ? null : automationId,
+                        string.IsNullOrEmpty(className) ? null : className,
+                        ct,
+                        maxResults, results, resultsLock, cts.Token);
+                    McpServer.McpRequestRouter.Log($"[FindElements STA] walk done, {results.Count} results so far");
+                }
 
-                    var elements = FindAllInProcess(pid, condition);
-                    var results = new List<object>();
+                McpServer.McpRequestRouter.Log($"[FindElements STA] search complete, {results.Count} total results");
+                return true;
+            });
 
-                    foreach (AutomationElement element in elements)
-                    {
-                        try
-                        {
-                            results.Add(BuildElementInfo(element));
-                        }
-                        catch { }
-                    }
-
-                    return McpToolResult.Success(new
-                    {
-                        count = results.Count,
-                        elements = results
-                    });
-                });
-            }
-            catch (TimeoutException ex)
+            McpServer.McpRequestRouter.Log($"[FindElements] awaiting Task.WhenAny ({UiaTimeoutSeconds}s timeout)...");
+            bool timedOut = false;
+            if (await Task.WhenAny(searchTask, Task.Delay(TimeSpan.FromSeconds(UiaTimeoutSeconds))) != searchTask)
             {
-                return McpToolResult.Error(ex.Message);
+                // Timed out — cancel the walk and use partial results
+                cts.Cancel();
+                timedOut = true;
+                McpServer.McpRequestRouter.Log("[FindElements] TIMED OUT, cancellation requested");
             }
+            else
+            {
+                McpServer.McpRequestRouter.Log("[FindElements] search task completed before timeout");
+                // Propagate exceptions from the search task
+                await searchTask;
+            }
+
+            List<Dictionary<string, object>> snapshot;
+            lock (resultsLock)
+            {
+                snapshot = new List<Dictionary<string, object>>(results);
+            }
+            McpServer.McpRequestRouter.Log($"[FindElements] snapshot={snapshot.Count}, timedOut={timedOut}, returning result");
+
+            if (timedOut && snapshot.Count == 0)
+            {
+                return McpToolResult.Error(
+                    $"UI Automation timed out after {UiaTimeoutSeconds} seconds with no results found. The target application may have a complex UI tree.");
+            }
+
+            return McpToolResult.Success(new
+            {
+                count = snapshot.Count,
+                elements = snapshot,
+                timedOut,
+                maxResults
+            });
         }
 
         private static async Task<McpToolResult> UiGetElementAsync(VsServiceAccessor accessor, JObject args)
@@ -513,82 +590,117 @@ namespace VsMcp.Extension.Tools
         private static async Task<McpToolResult> UiClickAsync(VsServiceAccessor accessor, JObject args)
         {
             var automationId = args.Value<string>("automationId");
+            var name = args.Value<string>("name");
             var x = args.Value<int?>("x");
             var y = args.Value<int?>("y");
+            var waitMs = args.Value<int?>("waitMs") ?? 0;
 
-            if (string.IsNullOrEmpty(automationId) && (!x.HasValue || !y.HasValue))
-                return McpToolResult.Error("Either 'automationId' or both 'x' and 'y' coordinates are required");
+            if (string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(name) && (!x.HasValue || !y.HasValue))
+                return McpToolResult.Error("Either 'automationId', 'name', or both 'x' and 'y' coordinates are required");
+
+            McpToolResult result;
 
             if (!string.IsNullOrEmpty(automationId))
             {
-                var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
-                if (pid == 0)
-                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
-
-                try
-                {
-                    return await RunUiaWithTimeoutAsync(() =>
-                    {
-                        var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                        var element = FindFirstInProcess(pid, condition);
-
-                        if (element == null)
-                            return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                        // Try InvokePattern first
-                        if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
-                        {
-                            ((InvokePattern)invokeObj).Invoke();
-                            return McpToolResult.Success(new
-                            {
-                                message = $"Clicked element '{automationId}' using InvokePattern",
-                                automationId
-                            });
-                        }
-
-                        // Fall back to clicking at the center of the element's bounding rectangle
-                        var bounds = element.Current.BoundingRectangle;
-                        if (!bounds.IsEmpty)
-                        {
-                            int clickX = (int)(bounds.X + bounds.Width / 2);
-                            int clickY = (int)(bounds.Y + bounds.Height / 2);
-                            PerformClick(clickX, clickY);
-                            return McpToolResult.Success(new
-                            {
-                                message = $"Clicked element '{automationId}' at ({clickX}, {clickY})",
-                                automationId,
-                                clickX,
-                                clickY
-                            });
-                        }
-
-                        return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern and has no bounding rectangle");
-                    });
-                }
-                catch (TimeoutException ex)
-                {
-                    return McpToolResult.Error(ex.Message);
-                }
+                var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                result = await ClickByConditionAsync(accessor, condition, $"AutomationId '{automationId}'", automationId);
+            }
+            else if (!string.IsNullOrEmpty(name))
+            {
+                var condition = new PropertyCondition(AutomationElement.NameProperty, name);
+                result = await ClickByConditionAsync(accessor, condition, $"Name '{name}'", name);
             }
             else
             {
                 // Click at screen coordinates - DTE on UI thread, P/Invoke on Task.Run
                 var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
 
+                var boundsError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, x.Value, y.Value));
+                if (boundsError != null)
+                    return McpToolResult.Error(boundsError);
+
                 await Task.Run(() =>
                 {
                     if (hwnd != IntPtr.Zero)
+                    {
                         SetForegroundWindow(hwnd);
+                        System.Threading.Thread.Sleep(100);
+                    }
 
                     PerformClick(x.Value, y.Value);
                 });
 
-                return McpToolResult.Success(new
+                result = McpToolResult.Success(new
                 {
                     message = $"Clicked at screen coordinates ({x.Value}, {y.Value})",
                     x = x.Value,
                     y = y.Value
                 });
+            }
+
+            if (waitMs > 0 && !result.IsError)
+                await Task.Delay(Math.Min(waitMs, 10000));
+
+            return result;
+        }
+
+        private static async Task<McpToolResult> ClickByConditionAsync(
+            VsServiceAccessor accessor, Condition condition, string description, string identifier)
+        {
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
+            {
+                return await RunUiaWithTimeoutAsync(() =>
+                {
+                    var element = FindFirstInProcess(pid, condition);
+
+                    if (element == null)
+                        return McpToolResult.Error($"Element with {description} not found");
+
+                    // Try InvokePattern first
+                    if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
+                    {
+                        ((InvokePattern)invokeObj).Invoke();
+                        return McpToolResult.Success(new
+                        {
+                            message = $"Clicked element with {description} using InvokePattern",
+                            identifier
+                        });
+                    }
+
+                    // Fall back to clicking at the center of the element's bounding rectangle
+                    var bounds = element.Current.BoundingRectangle;
+                    if (!bounds.IsEmpty)
+                    {
+                        int clickX = (int)(bounds.X + bounds.Width / 2);
+                        int clickY = (int)(bounds.Y + bounds.Height / 2);
+
+                        // Validate coordinates are within the debuggee window
+                        var proc = System.Diagnostics.Process.GetProcessById(pid);
+                        var mainHwnd = proc.MainWindowHandle;
+                        var boundsError = ValidateCoordinatesInWindow(mainHwnd, clickX, clickY);
+                        if (boundsError != null)
+                            return McpToolResult.Error(boundsError);
+
+                        PerformClick(clickX, clickY);
+                        return McpToolResult.Success(new
+                        {
+                            message = $"Clicked element with {description} at ({clickX}, {clickY})",
+                            identifier,
+                            clickX,
+                            clickY
+                        });
+                    }
+
+                    return McpToolResult.Error($"Element with {description} does not support InvokePattern and has no bounding rectangle");
+                });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
             }
         }
 
@@ -675,15 +787,204 @@ namespace VsMcp.Extension.Tools
             }
         }
 
+        private static async Task<McpToolResult> UiRightClickAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var automationId = args.Value<string>("automationId");
+            var name = args.Value<string>("name");
+            var x = args.Value<int?>("x");
+            var y = args.Value<int?>("y");
+            var waitMs = args.Value<int?>("waitMs") ?? 0;
+
+            if (string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(name) && (!x.HasValue || !y.HasValue))
+                return McpToolResult.Error("Either 'automationId', 'name', or both 'x' and 'y' coordinates are required");
+
+            int clickX, clickY;
+
+            if (!string.IsNullOrEmpty(automationId) || !string.IsNullOrEmpty(name))
+            {
+                try
+                {
+                    var coords = await ResolveElementCoordinatesAsync(accessor, automationId, name);
+                    if (coords == null)
+                    {
+                        var desc = !string.IsNullOrEmpty(automationId)
+                            ? $"AutomationId '{automationId}'"
+                            : $"Name '{name}'";
+                        return McpToolResult.Error($"Element with {desc} not found or has no bounding rectangle. Make sure debugging is active.");
+                    }
+                    clickX = coords.Value.x;
+                    clickY = coords.Value.y;
+                }
+                catch (TimeoutException ex)
+                {
+                    return McpToolResult.Error(ex.Message);
+                }
+            }
+            else
+            {
+                clickX = x.Value;
+                clickY = y.Value;
+            }
+
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+
+            var boundsError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, clickX, clickY));
+            if (boundsError != null)
+                return McpToolResult.Error(boundsError);
+
+            await Task.Run(() =>
+            {
+                if (hwnd != IntPtr.Zero)
+                {
+                    SetForegroundWindow(hwnd);
+                    System.Threading.Thread.Sleep(100);
+                }
+
+                PerformRightClick(clickX, clickY);
+            });
+
+            var result = McpToolResult.Success(new
+            {
+                message = $"Right-clicked at ({clickX}, {clickY})",
+                x = clickX,
+                y = clickY
+            });
+
+            if (waitMs > 0)
+                await Task.Delay(Math.Min(waitMs, 10000));
+
+            return result;
+        }
+
+        private static async Task<McpToolResult> UiDragAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var startX = args.Value<int>("startX");
+            var startY = args.Value<int>("startY");
+            var endX = args.Value<int>("endX");
+            var endY = args.Value<int>("endY");
+            var steps = args.Value<int?>("steps") ?? 10;
+            var delayMs = args.Value<int?>("delayMs") ?? 10;
+
+            if (steps < 1) steps = 1;
+            if (steps > 100) steps = 100;
+            if (delayMs < 1) delayMs = 1;
+            if (delayMs > 1000) delayMs = 1000;
+
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+
+            // Validate both start and end coordinates
+            var startError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, startX, startY));
+            if (startError != null)
+                return McpToolResult.Error(startError);
+
+            var endError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, endX, endY));
+            if (endError != null)
+                return McpToolResult.Error(endError);
+
+            await Task.Run(() =>
+            {
+                if (hwnd != IntPtr.Zero)
+                {
+                    SetForegroundWindow(hwnd);
+                    System.Threading.Thread.Sleep(100);
+                }
+
+                PerformDrag(startX, startY, endX, endY, steps, delayMs);
+            });
+
+            return McpToolResult.Success(new
+            {
+                message = $"Dragged from ({startX}, {startY}) to ({endX}, {endY})",
+                startX,
+                startY,
+                endX,
+                endY,
+                steps,
+                delayMs
+            });
+        }
+
         #endregion
 
         #region Helpers
+
+        private static string ValidateCoordinatesInWindow(IntPtr hwnd, int x, int y)
+        {
+            if (hwnd == IntPtr.Zero)
+                return null; // No window to validate against
+
+            if (!GetWindowRect(hwnd, out RECT rect))
+                return null; // Can't get rect, skip validation
+
+            if (x >= rect.Left && x <= rect.Right && y >= rect.Top && y <= rect.Bottom)
+                return null; // Inside window bounds
+
+            return $"Coordinates ({x}, {y}) are outside the debugged application's window bounds ({rect.Left},{rect.Top} - {rect.Right},{rect.Bottom}). Click was not performed to prevent interacting with unintended applications.";
+        }
 
         private static void PerformClick(int x, int y)
         {
             SetCursorPos(x, y);
             mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static void PerformRightClick(int x, int y)
+        {
+            SetCursorPos(x, y);
+            mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static void PerformDrag(int startX, int startY, int endX, int endY, int steps, int delayMs)
+        {
+            SetCursorPos(startX, startY);
+            System.Threading.Thread.Sleep(50);
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(100);
+
+            for (int i = 1; i <= steps; i++)
+            {
+                int x = startX + (endX - startX) * i / steps;
+                int y = startY + (endY - startY) * i / steps;
+                SetCursorPos(x, y);
+                System.Threading.Thread.Sleep(delayMs);
+            }
+
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static async Task<(int x, int y)?> ResolveElementCoordinatesAsync(
+            VsServiceAccessor accessor, string automationId, string name)
+        {
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return null;
+
+            return await RunUiaWithTimeoutAsync(() =>
+            {
+                AutomationElement element = null;
+
+                if (!string.IsNullOrEmpty(automationId))
+                {
+                    var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                    element = FindFirstInProcess(pid, condition);
+                }
+                else if (!string.IsNullOrEmpty(name))
+                {
+                    var condition = new PropertyCondition(AutomationElement.NameProperty, name);
+                    element = FindFirstInProcess(pid, condition);
+                }
+
+                if (element == null)
+                    return ((int, int)?)null;
+
+                var bounds = element.Current.BoundingRectangle;
+                if (bounds.IsEmpty)
+                    return null;
+
+                return ((int)(bounds.X + bounds.Width / 2), (int)(bounds.Y + bounds.Height / 2));
+            });
         }
 
         private static Dictionary<string, object> BuildElementInfo(AutomationElement element)
@@ -700,29 +1001,122 @@ namespace VsMcp.Extension.Tools
             };
         }
 
-        private static object BuildElementTree(AutomationElement element, int depth, int maxDepth)
+        private static object BuildElementTree(AutomationElement element, int depth, int maxDepth,
+            int maxChildren, int maxElements, ref int elementCount)
         {
             var info = BuildElementInfo(element);
+            elementCount++;
+
+            if (elementCount > maxElements)
+            {
+                info["truncated"] = true;
+                return info;
+            }
 
             if (depth < maxDepth)
             {
                 var children = new List<object>();
+                bool childrenTruncated = false;
                 try
                 {
                     var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
-                    while (child != null)
+                    int childCount = 0;
+                    while (child != null && childCount < maxChildren && elementCount <= maxElements)
                     {
-                        children.Add(BuildElementTree(child, depth + 1, maxDepth));
+                        children.Add(BuildElementTree(child, depth + 1, maxDepth,
+                            maxChildren, maxElements, ref elementCount));
                         child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                        childCount++;
                     }
+                    if (child != null)
+                        childrenTruncated = true;
                 }
                 catch { }
 
                 if (children.Count > 0)
                     info["children"] = children;
+                if (childrenTruncated)
+                    info["childrenTruncated"] = true;
             }
 
             return info;
+        }
+
+        private static bool MatchesCriteria(AutomationElement element,
+            string name, string automationId, string className, ControlType controlType)
+        {
+            try
+            {
+                if (name != null && element.Current.Name != name)
+                    return false;
+                if (automationId != null && element.Current.AutomationId != automationId)
+                    return false;
+                if (className != null && element.Current.ClassName != className)
+                    return false;
+                if (controlType != null && !Equals(element.Current.ControlType, controlType))
+                    return false;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void WalkAndFindElements(
+            AutomationElement element,
+            string name, string automationId, string className, ControlType controlType,
+            int maxResults, List<Dictionary<string, object>> results, object resultsLock,
+            CancellationToken ct)
+        {
+            if (ct.IsCancellationRequested)
+                return;
+
+            if (MatchesCriteria(element, name, automationId, className, controlType))
+            {
+                try
+                {
+                    var info = BuildElementInfo(element);
+                    lock (resultsLock)
+                    {
+                        if (results.Count >= maxResults)
+                            return;
+                        results.Add(info);
+                        if (results.Count >= maxResults)
+                            return;
+                    }
+                }
+                catch { }
+            }
+
+            // Check again before descending
+            lock (resultsLock)
+            {
+                if (results.Count >= maxResults)
+                    return;
+            }
+
+            try
+            {
+                var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
+                while (child != null)
+                {
+                    if (ct.IsCancellationRequested)
+                        return;
+
+                    lock (resultsLock)
+                    {
+                        if (results.Count >= maxResults)
+                            return;
+                    }
+
+                    WalkAndFindElements(child, name, automationId, className, controlType,
+                        maxResults, results, resultsLock, ct);
+
+                    child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                }
+            }
+            catch { }
         }
 
         private static ControlType ParseControlType(string controlTypeName)

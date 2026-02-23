@@ -44,7 +44,17 @@ namespace VsMcp.Shared.Protocol
                 + "OFFLINE MODE: If a tool returns 'Visual Studio is not running', the error message includes a list of detected VS installations with their devenv.exe paths. "
                 + "Ask the user which version to start, showing the detected list. "
                 + "Use PowerShell Start-Process with the exact devenv.exe path from the list (NOT cmd). "
-                + "After starting VS, wait 30 seconds, then retry.";
+                + "After starting VS, wait 30 seconds, then retry. "
+                + "UI AUTOMATION GUIDELINES: "
+                + "DPI SCALING: Screenshot pixel coordinates from ui_capture_window do NOT match screen coordinates used by ui_click/ui_drag due to DPI scaling. "
+                + "NEVER estimate coordinates from screenshots. Always use ui_find_elements to get element bounds in screen coordinates, then calculate click/drag positions from those bounds. "
+                + "POPUPS OUTSIDE WINDOW: WPF popups (context menu submenus, tooltips, etc.) may render outside the main window bounds. "
+                + "ui_click/ui_drag reject coordinates outside the window bounds. "
+                + "For elements outside the window, use ui_find_elements to locate the element by name, then use ui_click with the name parameter or ui_invoke with AutomationId instead of coordinates. "
+                + "Alternatively, adjust the right-click position so submenus stay within the window. "
+                + "DRAG AND HIT-TESTING: ui_drag sends Win32 mouse events, so WPF visual hit-testing applies. "
+                + "If a visual element (e.g. Polyline, Border) overlaps the drag start position, the event goes to that element instead of the intended target. "
+                + "When drag does not work as expected, use ui_get_tree or ui_find_elements to check what element is at the start position.";
         }
     }
 }

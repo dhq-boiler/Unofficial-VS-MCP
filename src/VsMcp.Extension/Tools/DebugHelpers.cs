@@ -93,9 +93,14 @@ namespace VsMcp.Extension.Tools
         /// </summary>
         public static Expression TryEvaluateExpression(Debugger debugger, string expression)
         {
+            return TryEvaluateExpression(debugger, expression, false, 3000);
+        }
+
+        public static Expression TryEvaluateExpression(Debugger debugger, string expression, bool allowSideEffects, int timeout)
+        {
             try
             {
-                var result = debugger.GetExpression(expression, false, 3000);
+                var result = debugger.GetExpression(expression, allowSideEffects, timeout);
                 if (result.IsValidValue) return result;
             }
             catch { }
@@ -138,7 +143,7 @@ namespace VsMcp.Extension.Tools
                 {
                     debugger.CurrentThread = candidate.Key;
                     debugger.CurrentStackFrame = candidate.Value;
-                    var result = debugger.GetExpression(expression, false, 3000);
+                    var result = debugger.GetExpression(expression, allowSideEffects, timeout);
                     if (result.IsValidValue) return result;
                 }
                 catch { }

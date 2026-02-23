@@ -39,10 +39,10 @@ namespace VsMcp.Extension.Tools
                 if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
                     return McpToolResult.Error("Debugger must be in Break mode to execute expressions");
 
-                // Second parameter = true allows side effects
-                var result = dte.Debugger.GetExpression(expression, true, timeout);
+                // Use frame search logic to find a suitable managed frame (allowSideEffects = true)
+                var result = DebugHelpers.TryEvaluateExpression(dte.Debugger, expression, true, timeout);
 
-                if (result.IsValidValue)
+                if (result != null)
                 {
                     return McpToolResult.Success(new
                     {
@@ -52,7 +52,7 @@ namespace VsMcp.Extension.Tools
                     });
                 }
 
-                return McpToolResult.Error($"Expression evaluation failed: {result.Value}");
+                return McpToolResult.Error("Expression evaluation failed: no suitable managed frame found");
             });
         }
     }

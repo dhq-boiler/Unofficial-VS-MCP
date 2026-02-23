@@ -23,8 +23,22 @@ namespace VsMcp.StdioProxy
     {
         private static readonly HttpClient HttpClient = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(30)
+            Timeout = TimeSpan.FromSeconds(90)
         };
+
+        private static readonly string LogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VsMcp", "proxy-debug.log");
+
+        private static void Log(string message)
+        {
+            try
+            {
+                var line = $"{DateTime.Now:HH:mm:ss.fff} [{Environment.CurrentManagedThreadId}] {message}\n";
+                File.AppendAllText(LogPath, line);
+            }
+            catch { }
+        }
 
         private static string _baseUrl;
 
@@ -89,6 +103,11 @@ namespace VsMcp.StdioProxy
         private static async Task RelayLoopAsync(int? pid, CancellationToken ct)
         {
             using var reader = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
+            var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
+            {
+                AutoFlush = true,
+                NewLine = "\n"
+            };
 
             while (!ct.IsCancellationRequested)
             {
@@ -126,7 +145,8 @@ namespace VsMcp.StdioProxy
                         break;
 
                     case McpConstants.MethodInitialized:
-                        // Notification - no response needed
+                    case "notifications/cancelled":
+                        // Notifications - no response needed
                         continue;
 
                     case McpConstants.MethodPing:
@@ -137,7 +157,7 @@ namespace VsMcp.StdioProxy
                     case McpConstants.MethodToolsList:
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
@@ -147,6 +167,8 @@ namespace VsMcp.StdioProxy
                         break;
 
                     case McpConstants.MethodToolsCall:
+                        var toolName = request["params"]?.Value<string>("name") ?? "?";
+                        Log($"[Relay] >>> tools/call id={id} tool={toolName}");
                         // If not connected, try to reconnect before giving up
                         if (_baseUrl == null)
                         {
@@ -154,19 +176,28 @@ namespace VsMcp.StdioProxy
                         }
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
+                            Log($"[Relay] <<< tools/call id={id} tool={toolName} response=null (offline)");
                             // VS not connected - return error
                             response = BuildToolsCallOfflineError(id);
+                        }
+                        else
+                        {
+                            Log($"[Relay] <<< tools/call id={id} tool={toolName} response={response.Length} bytes");
                         }
                         break;
 
                     default:
+                        // Notifications (no id) should not produce responses
+                        if (id == null || id.Type == JTokenType.Null)
+                            continue;
+
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
@@ -178,8 +209,9 @@ namespace VsMcp.StdioProxy
 
                 if (response != null)
                 {
-                    Console.Out.WriteLine(response);
-                    Console.Out.Flush();
+                    Log($"[Stdout] writing {response.Length} bytes for id={id}...");
+                    stdout.WriteLine(response);
+                    Log($"[Stdout] flush complete for id={id}");
                 }
             }
         }
@@ -194,18 +226,22 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static async Task<string> TryRelayAsync(string requestJson, CancellationToken ct)
+        private static async Task<string> TryRelayAsync(string requestJson, JToken id, CancellationToken ct)
         {
             try
             {
                 var mcpUrl = $"{_baseUrl}/mcp";
                 var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                Log($"[HTTP] PostAsync id={id} to {mcpUrl}...");
                 var response = await HttpClient.PostAsync(mcpUrl, content, ct);
+                Log($"[HTTP] PostAsync id={id} status={response.StatusCode}");
 
                 if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
                     return null; // notification - no response
 
+                Log($"[HTTP] ReadAsStringAsync id={id}...");
                 var body = await response.Content.ReadAsStringAsync();
+                Log($"[HTTP] ReadAsStringAsync id={id} done, {body?.Length ?? 0} bytes");
                 return string.IsNullOrEmpty(body) ? null : body;
             }
             catch (HttpRequestException ex)
@@ -230,6 +266,28 @@ namespace VsMcp.StdioProxy
             catch (TaskCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (TaskCanceledException)
+            {
+                // HttpClient.Timeout fired
+                await Console.Error.WriteLineAsync("[VsMcp.StdioProxy] Request timed out");
+                if (id != null)
+                {
+                    var timeoutResult = new JObject
+                    {
+                        ["content"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "text",
+                                ["text"] = "Tool execution timed out. Visual Studio may be busy or blocked by a modal dialog."
+                            }
+                        },
+                        ["isError"] = true
+                    };
+                    return BuildJsonRpcResult(id, timeoutResult);
+                }
+                return null;
             }
             catch (Exception ex)
             {

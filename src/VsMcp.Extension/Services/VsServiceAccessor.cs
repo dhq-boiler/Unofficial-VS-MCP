@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
@@ -13,6 +14,8 @@ namespace VsMcp.Extension.Services
     /// </summary>
     public class VsServiceAccessor
     {
+        private static readonly TimeSpan DefaultUiThreadTimeout = TimeSpan.FromSeconds(10);
+
         private readonly AsyncPackage _package;
         private DTE2 _dte;
 
@@ -34,29 +37,41 @@ namespace VsMcp.Extension.Services
         /// <summary>
         /// Executes an action on the UI thread and returns the result.
         /// All EnvDTE calls must go through this method.
+        /// Times out after 10 seconds to prevent indefinite hangs.
         /// </summary>
         public async Task<T> RunOnUIThreadAsync<T>(Func<T> func)
         {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            return func();
+            using (var cts = new CancellationTokenSource(DefaultUiThreadTimeout))
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cts.Token);
+                return func();
+            }
         }
 
         /// <summary>
         /// Executes an action on the UI thread.
+        /// Times out after 10 seconds to prevent indefinite hangs.
         /// </summary>
         public async Task RunOnUIThreadAsync(Action action)
         {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            action();
+            using (var cts = new CancellationTokenSource(DefaultUiThreadTimeout))
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cts.Token);
+                action();
+            }
         }
 
         /// <summary>
         /// Executes an async function, switching to UI thread first.
+        /// Times out after 10 seconds to prevent indefinite hangs.
         /// </summary>
         public async Task<T> RunOnUIThreadAsync<T>(Func<Task<T>> func)
         {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            return await func();
+            using (var cts = new CancellationTokenSource(DefaultUiThreadTimeout))
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cts.Token);
+                return await func();
+            }
         }
 
         public async Task<IVsOutputWindow> GetOutputWindowAsync()
