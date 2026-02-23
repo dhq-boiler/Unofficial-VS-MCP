@@ -816,6 +816,10 @@ namespace VsMcp.Extension.Tools
 
             var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
 
+            var boundsError = await Task.Run(() => ValidateCoordinatesInWindow(hwnd, clickX, clickY));
+            if (boundsError != null)
+                return McpToolResult.Error(boundsError);
+
             await Task.Run(() =>
             {
                 if (hwnd != IntPtr.Zero)
