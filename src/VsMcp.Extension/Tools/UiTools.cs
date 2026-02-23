@@ -109,6 +109,8 @@ namespace VsMcp.Extension.Tools
                     "Get the UI element tree of the debugged application's main window",
                     SchemaBuilder.Create()
                         .AddInteger("depth", "Maximum depth of the tree (default: 3)")
+                        .AddInteger("maxChildren", "Maximum number of child elements to enumerate per node (default: 50)")
+                        .AddInteger("maxElements", "Maximum total number of elements in the tree (default: 500)")
                         .Build()),
                 args => UiGetTreeAsync(accessor, args));
 
@@ -352,6 +354,8 @@ namespace VsMcp.Extension.Tools
         private static async Task<McpToolResult> UiGetTreeAsync(VsServiceAccessor accessor, JObject args)
         {
             var maxDepth = args.Value<int?>("depth") ?? 3;
+            var maxChildren = args.Value<int?>("maxChildren") ?? 50;
+            var maxElements = args.Value<int?>("maxElements") ?? 500;
 
             var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
             if (hwnd == IntPtr.Zero)
@@ -359,12 +363,17 @@ namespace VsMcp.Extension.Tools
 
             try
             {
+                int elementCount = 0;
+                var capturedCount = 0;
                 var tree = await RunUiaWithTimeoutAsync(() =>
                 {
                     var root = AutomationElement.FromHandle(hwnd);
-                    return BuildElementTree(root, 0, maxDepth);
+                    var result = BuildElementTree(root, 0, maxDepth,
+                        maxChildren, maxElements, ref elementCount);
+                    capturedCount = elementCount;
+                    return result;
                 });
-                return McpToolResult.Success(tree);
+                return McpToolResult.Success(new { tree, totalElements = capturedCount });
             }
             catch (TimeoutException ex)
             {
@@ -722,26 +731,42 @@ namespace VsMcp.Extension.Tools
             };
         }
 
-        private static object BuildElementTree(AutomationElement element, int depth, int maxDepth)
+        private static object BuildElementTree(AutomationElement element, int depth, int maxDepth,
+            int maxChildren, int maxElements, ref int elementCount)
         {
             var info = BuildElementInfo(element);
+            elementCount++;
+
+            if (elementCount > maxElements)
+            {
+                info["truncated"] = true;
+                return info;
+            }
 
             if (depth < maxDepth)
             {
                 var children = new List<object>();
+                bool childrenTruncated = false;
                 try
                 {
                     var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
-                    while (child != null)
+                    int childCount = 0;
+                    while (child != null && childCount < maxChildren && elementCount <= maxElements)
                     {
-                        children.Add(BuildElementTree(child, depth + 1, maxDepth));
+                        children.Add(BuildElementTree(child, depth + 1, maxDepth,
+                            maxChildren, maxElements, ref elementCount));
                         child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                        childCount++;
                     }
+                    if (child != null)
+                        childrenTruncated = true;
                 }
                 catch { }
 
                 if (children.Count > 0)
                     info["children"] = children;
+                if (childrenTruncated)
+                    info["childrenTruncated"] = true;
             }
 
             return info;
