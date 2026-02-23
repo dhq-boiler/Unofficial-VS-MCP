@@ -40,3 +40,21 @@ VS未起動時: Claude Code → StdioProxy → ローカル応答(initialize/too
 | `ping` | ローカル応答 | ローカル応答 |
 | `tools/list` | HTTP中継 | キャッシュから応答 |
 | `tools/call` | HTTP中継 | エラー応答 |
+
+## バージョン更新時の注意
+
+バージョンを上げる際は以下の5箇所を更新する：
+
+| ファイル | 形式 |
+|---|---|
+| `src/VsMcp.Extension/source.extension.vsixmanifest` | `Identity Version="x.y.z"` |
+| `src/VsMcp.Extension/extension.vsixmanifest` | 同上（.gitignore対象・ビルド生成） |
+| `src/VsMcp.Extension/VsMcp.Extension.csproj` | `<Version>x.y.z</Version>` |
+| `src/VsMcp.Shared/VsMcp.Shared.csproj` | 同上 |
+| `src/VsMcp.StdioProxy/VsMcp.StdioProxy.csproj` | 同上 |
+
+**重要:** VSSDKの `DetokenizeVsixManifestFile` ターゲットが `obj\Debug\net48\extension.vsixmanifest` をキャッシュするため、バージョン変更後は `obj` ディレクトリを手動削除してからリビルドしないと VSIX パッケージに反映されない：
+
+```powershell
+Remove-Item -Recurse -Force src\VsMcp.Extension\obj, src\VsMcp.Extension\bin
+```

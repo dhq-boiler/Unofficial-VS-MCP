@@ -96,20 +96,6 @@ namespace VsMcp.Extension.Tools
                     catch { }
                 }
 
-                var props = new Dictionary<string, string>();
-                try
-                {
-                    foreach (Property prop in solution.Properties)
-                    {
-                        try
-                        {
-                            props[prop.Name] = prop.Value?.ToString() ?? "";
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-
                 return McpToolResult.Success(new
                 {
                     fullName = solution.FullName,
