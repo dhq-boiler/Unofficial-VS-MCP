@@ -23,7 +23,7 @@ namespace VsMcp.StdioProxy
     {
         private static readonly HttpClient HttpClient = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(30)
+            Timeout = TimeSpan.FromSeconds(90)
         };
 
         private static string _baseUrl;
@@ -137,7 +137,7 @@ namespace VsMcp.StdioProxy
                     case McpConstants.MethodToolsList:
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
@@ -154,7 +154,7 @@ namespace VsMcp.StdioProxy
                         }
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
@@ -166,7 +166,7 @@ namespace VsMcp.StdioProxy
                     default:
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, ct);
+                            response = await TryRelayAsync(line, id, ct);
                         }
                         if (response == null)
                         {
@@ -194,7 +194,7 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static async Task<string> TryRelayAsync(string requestJson, CancellationToken ct)
+        private static async Task<string> TryRelayAsync(string requestJson, JToken id, CancellationToken ct)
         {
             try
             {
@@ -230,6 +230,28 @@ namespace VsMcp.StdioProxy
             catch (TaskCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (TaskCanceledException)
+            {
+                // HttpClient.Timeout fired
+                await Console.Error.WriteLineAsync("[VsMcp.StdioProxy] Request timed out");
+                if (id != null)
+                {
+                    var timeoutResult = new JObject
+                    {
+                        ["content"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "text",
+                                ["text"] = "Tool execution timed out. Visual Studio may be busy or blocked by a modal dialog."
+                            }
+                        },
+                        ["isError"] = true
+                    };
+                    return BuildJsonRpcResult(id, timeoutResult);
+                }
+                return null;
             }
             catch (Exception ex)
             {
