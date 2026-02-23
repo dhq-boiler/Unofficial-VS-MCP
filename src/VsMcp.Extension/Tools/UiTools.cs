@@ -581,7 +581,10 @@ namespace VsMcp.Extension.Tools
                 await Task.Run(() =>
                 {
                     if (hwnd != IntPtr.Zero)
+                    {
                         SetForegroundWindow(hwnd);
+                        System.Threading.Thread.Sleep(100);
+                    }
 
                     PerformClick(x.Value, y.Value);
                 });
@@ -779,7 +782,10 @@ namespace VsMcp.Extension.Tools
             await Task.Run(() =>
             {
                 if (hwnd != IntPtr.Zero)
+                {
                     SetForegroundWindow(hwnd);
+                    System.Threading.Thread.Sleep(100);
+                }
 
                 PerformRightClick(clickX, clickY);
             });
@@ -816,7 +822,10 @@ namespace VsMcp.Extension.Tools
             await Task.Run(() =>
             {
                 if (hwnd != IntPtr.Zero)
+                {
                     SetForegroundWindow(hwnd);
+                    System.Threading.Thread.Sleep(100);
+                }
 
                 PerformDrag(startX, startY, endX, endY, steps, delayMs);
             });
