@@ -135,7 +135,7 @@ namespace VsMcp.Extension.McpServer
                 // Run tool handler with timeout
                 var toolTask = Task.Run(() => handler(args));
                 var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60));
-                var completed = await Task.WhenAny(toolTask, timeoutTask);
+                var completed = await Task.WhenAny(toolTask, timeoutTask).ConfigureAwait(false);
 
                 if (completed == timeoutTask)
                 {
@@ -145,7 +145,7 @@ namespace VsMcp.Extension.McpServer
                     return JsonRpcResponse.Success(request.Id, timeoutResult);
                 }
 
-                var toolResult = await toolTask;
+                var toolResult = await toolTask.ConfigureAwait(false);
                 return JsonRpcResponse.Success(request.Id, toolResult);
             }
             catch (COMException ex)
