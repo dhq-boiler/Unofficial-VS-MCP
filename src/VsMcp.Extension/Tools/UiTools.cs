@@ -423,7 +423,9 @@ namespace VsMcp.Extension.Tools
                 return McpToolResult.Error("At least one search criterion must be provided (name, automationId, className, or controlType)");
             }
 
+            McpServer.McpRequestRouter.Log("[FindElements] getting PID via RunOnUIThreadAsync...");
             var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            McpServer.McpRequestRouter.Log($"[FindElements] PID={pid}");
             if (pid == 0)
                 return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
 
@@ -440,11 +442,14 @@ namespace VsMcp.Extension.Tools
             var resultsLock = new object();
             var cts = new CancellationTokenSource();
 
+            McpServer.McpRequestRouter.Log("[FindElements] starting STA search thread...");
             var searchTask = RunOnBackgroundSTAAsync(() =>
             {
+                McpServer.McpRequestRouter.Log("[FindElements STA] FindAll(TreeScope.Children) starting...");
                 // Find top-level windows for the target process
                 var pidCondition = new PropertyCondition(AutomationElement.ProcessIdProperty, pid);
                 var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, pidCondition);
+                McpServer.McpRequestRouter.Log($"[FindElements STA] FindAll done, {windows.Count} windows found");
 
                 foreach (AutomationElement window in windows)
                 {
@@ -457,26 +462,32 @@ namespace VsMcp.Extension.Tools
                             break;
                     }
 
+                    McpServer.McpRequestRouter.Log("[FindElements STA] walking window tree...");
                     WalkAndFindElements(window,
                         string.IsNullOrEmpty(name) ? null : name,
                         string.IsNullOrEmpty(automationId) ? null : automationId,
                         string.IsNullOrEmpty(className) ? null : className,
                         ct,
                         maxResults, results, resultsLock, cts.Token);
+                    McpServer.McpRequestRouter.Log($"[FindElements STA] walk done, {results.Count} results so far");
                 }
 
+                McpServer.McpRequestRouter.Log($"[FindElements STA] search complete, {results.Count} total results");
                 return true;
             });
 
+            McpServer.McpRequestRouter.Log($"[FindElements] awaiting Task.WhenAny ({UiaTimeoutSeconds}s timeout)...");
             bool timedOut = false;
             if (await Task.WhenAny(searchTask, Task.Delay(TimeSpan.FromSeconds(UiaTimeoutSeconds))) != searchTask)
             {
                 // Timed out — cancel the walk and use partial results
                 cts.Cancel();
                 timedOut = true;
+                McpServer.McpRequestRouter.Log("[FindElements] TIMED OUT, cancellation requested");
             }
             else
             {
+                McpServer.McpRequestRouter.Log("[FindElements] search task completed before timeout");
                 // Propagate exceptions from the search task
                 await searchTask;
             }
@@ -486,6 +497,7 @@ namespace VsMcp.Extension.Tools
             {
                 snapshot = new List<Dictionary<string, object>>(results);
             }
+            McpServer.McpRequestRouter.Log($"[FindElements] snapshot={snapshot.Count}, timedOut={timedOut}, returning result");
 
             if (timedOut && snapshot.Count == 0)
             {

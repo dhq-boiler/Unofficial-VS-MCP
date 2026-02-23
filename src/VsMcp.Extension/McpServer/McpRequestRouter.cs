@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +15,20 @@ namespace VsMcp.Extension.McpServer
     /// </summary>
     public class McpRequestRouter
     {
+        private static readonly string LogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VsMcp", "debug.log");
+
+        internal static void Log(string message)
+        {
+            try
+            {
+                var line = $"{DateTime.Now:HH:mm:ss.fff} [{Thread.CurrentThread.ManagedThreadId}] {message}\n";
+                File.AppendAllText(LogPath, line);
+            }
+            catch { }
+        }
+
         private readonly McpToolRegistry _registry;
 
         public McpRequestRouter(McpToolRegistry registry)
@@ -121,6 +137,7 @@ namespace VsMcp.Extension.McpServer
             try
             {
                 // Verify VS UI thread is responsive before executing tool
+                Log($"[Router] {toolName}: switching to UI thread...");
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try
                 {
@@ -128,38 +145,47 @@ namespace VsMcp.Extension.McpServer
                 }
                 catch (OperationCanceledException)
                 {
+                    Log($"[Router] {toolName}: UI thread switch TIMED OUT (10s)");
                     var timeoutResult = McpToolResult.Error("Visual Studio is not responding. The UI thread may be blocked by a modal dialog.");
                     return JsonRpcResponse.Success(request.Id, timeoutResult);
                 }
+                Log($"[Router] {toolName}: UI thread OK, starting tool via Task.Run...");
 
                 // Run tool handler with timeout
                 var toolTask = Task.Run(() => handler(args));
                 var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60));
+                Log($"[Router] {toolName}: awaiting Task.WhenAny (60s timeout)...");
                 var completed = await Task.WhenAny(toolTask, timeoutTask).ConfigureAwait(false);
 
                 if (completed == timeoutTask)
                 {
+                    Log($"[Router] {toolName}: HANDLER TIMED OUT (60s)");
                     var timeoutResult = McpToolResult.Error(
                         $"Tool '{toolName}' timed out after 60 seconds. "
                         + "Visual Studio may be busy or blocked by a modal dialog.");
                     return JsonRpcResponse.Success(request.Id, timeoutResult);
                 }
 
+                Log($"[Router] {toolName}: handler completed, awaiting result...");
                 var toolResult = await toolTask.ConfigureAwait(false);
+                Log($"[Router] {toolName}: returning result (isError={toolResult?.IsError})");
                 return JsonRpcResponse.Success(request.Id, toolResult);
             }
             catch (COMException ex)
             {
+                Log($"[Router] {toolName}: COMException: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Visual Studio connection lost: {ex.Message}");
                 return JsonRpcResponse.Success(request.Id, errorResult);
             }
             catch (InvalidComObjectException ex)
             {
+                Log($"[Router] {toolName}: InvalidComObjectException: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Visual Studio instance is no longer available: {ex.Message}");
                 return JsonRpcResponse.Success(request.Id, errorResult);
             }
             catch (Exception ex)
             {
+                Log($"[Router] {toolName}: Exception: {ex.GetType().Name}: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Tool execution failed: {ex.Message}");
                 return JsonRpcResponse.Success(request.Id, errorResult);
             }
