@@ -165,6 +165,20 @@ namespace VsMcp.Extension.Tools
 
             registry.Register(
                 new McpToolDefinition(
+                    "ui_drag",
+                    "Perform a drag-and-drop operation from start coordinates to end coordinates",
+                    SchemaBuilder.Create()
+                        .AddInteger("startX", "Screen X coordinate of the drag start point", required: true)
+                        .AddInteger("startY", "Screen Y coordinate of the drag start point", required: true)
+                        .AddInteger("endX", "Screen X coordinate of the drag end point", required: true)
+                        .AddInteger("endY", "Screen Y coordinate of the drag end point", required: true)
+                        .AddInteger("steps", "Number of intermediate move steps (default: 10)")
+                        .AddInteger("delayMs", "Milliseconds to wait between each step (default: 10)")
+                        .Build()),
+                args => UiDragAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
                     "ui_set_value",
                     "Set the value of a UI element (e.g. text input) using ValuePattern",
                     SchemaBuilder.Create()
@@ -783,6 +797,42 @@ namespace VsMcp.Extension.Tools
             return result;
         }
 
+        private static async Task<McpToolResult> UiDragAsync(VsServiceAccessor accessor, JObject args)
+        {
+            var startX = args.Value<int>("startX");
+            var startY = args.Value<int>("startY");
+            var endX = args.Value<int>("endX");
+            var endY = args.Value<int>("endY");
+            var steps = args.Value<int?>("steps") ?? 10;
+            var delayMs = args.Value<int?>("delayMs") ?? 10;
+
+            if (steps < 1) steps = 1;
+            if (steps > 100) steps = 100;
+            if (delayMs < 1) delayMs = 1;
+            if (delayMs > 1000) delayMs = 1000;
+
+            var hwnd = await accessor.RunOnUIThreadAsync(() => GetDebuggeeWindowHandle(accessor));
+
+            await Task.Run(() =>
+            {
+                if (hwnd != IntPtr.Zero)
+                    SetForegroundWindow(hwnd);
+
+                PerformDrag(startX, startY, endX, endY, steps, delayMs);
+            });
+
+            return McpToolResult.Success(new
+            {
+                message = $"Dragged from ({startX}, {startY}) to ({endX}, {endY})",
+                startX,
+                startY,
+                endX,
+                endY,
+                steps,
+                delayMs
+            });
+        }
+
         #endregion
 
         #region Helpers
@@ -799,6 +849,24 @@ namespace VsMcp.Extension.Tools
             SetCursorPos(x, y);
             mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
             mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        private static void PerformDrag(int startX, int startY, int endX, int endY, int steps, int delayMs)
+        {
+            SetCursorPos(startX, startY);
+            System.Threading.Thread.Sleep(50);
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(100);
+
+            for (int i = 1; i <= steps; i++)
+            {
+                int x = startX + (endX - startX) * i / steps;
+                int y = startY + (endY - startY) * i / steps;
+                SetCursorPos(x, y);
+                System.Threading.Thread.Sleep(delayMs);
+            }
+
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         }
 
         private static async Task<(int x, int y)?> ResolveElementCoordinatesAsync(
