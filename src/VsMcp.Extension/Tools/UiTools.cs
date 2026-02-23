@@ -136,11 +136,13 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "ui_click",
-                    "Click a UI element by AutomationId (using InvokePattern) or by screen coordinates",
+                    "Click a UI element by AutomationId, Name, or screen coordinates",
                     SchemaBuilder.Create()
                         .AddString("automationId", "AutomationId of the UI element to click")
-                        .AddInteger("x", "Screen X coordinate to click (used if automationId is not provided)")
-                        .AddInteger("y", "Screen Y coordinate to click (used if automationId is not provided)")
+                        .AddString("name", "Name of the UI element to click (used if automationId is not provided)")
+                        .AddInteger("x", "Screen X coordinate to click (used if automationId and name are not provided)")
+                        .AddInteger("y", "Screen Y coordinate to click (used if automationId and name are not provided)")
+                        .AddInteger("waitMs", "Milliseconds to wait after clicking (default: 0)")
                         .Build()),
                 args => UiClickAsync(accessor, args));
 
@@ -513,62 +515,25 @@ namespace VsMcp.Extension.Tools
         private static async Task<McpToolResult> UiClickAsync(VsServiceAccessor accessor, JObject args)
         {
             var automationId = args.Value<string>("automationId");
+            var name = args.Value<string>("name");
             var x = args.Value<int?>("x");
             var y = args.Value<int?>("y");
+            var waitMs = args.Value<int?>("waitMs") ?? 0;
 
-            if (string.IsNullOrEmpty(automationId) && (!x.HasValue || !y.HasValue))
-                return McpToolResult.Error("Either 'automationId' or both 'x' and 'y' coordinates are required");
+            if (string.IsNullOrEmpty(automationId) && string.IsNullOrEmpty(name) && (!x.HasValue || !y.HasValue))
+                return McpToolResult.Error("Either 'automationId', 'name', or both 'x' and 'y' coordinates are required");
+
+            McpToolResult result;
 
             if (!string.IsNullOrEmpty(automationId))
             {
-                var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
-                if (pid == 0)
-                    return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
-
-                try
-                {
-                    return await RunUiaWithTimeoutAsync(() =>
-                    {
-                        var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-                        var element = FindFirstInProcess(pid, condition);
-
-                        if (element == null)
-                            return McpToolResult.Error($"Element with AutomationId '{automationId}' not found");
-
-                        // Try InvokePattern first
-                        if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
-                        {
-                            ((InvokePattern)invokeObj).Invoke();
-                            return McpToolResult.Success(new
-                            {
-                                message = $"Clicked element '{automationId}' using InvokePattern",
-                                automationId
-                            });
-                        }
-
-                        // Fall back to clicking at the center of the element's bounding rectangle
-                        var bounds = element.Current.BoundingRectangle;
-                        if (!bounds.IsEmpty)
-                        {
-                            int clickX = (int)(bounds.X + bounds.Width / 2);
-                            int clickY = (int)(bounds.Y + bounds.Height / 2);
-                            PerformClick(clickX, clickY);
-                            return McpToolResult.Success(new
-                            {
-                                message = $"Clicked element '{automationId}' at ({clickX}, {clickY})",
-                                automationId,
-                                clickX,
-                                clickY
-                            });
-                        }
-
-                        return McpToolResult.Error($"Element '{automationId}' does not support InvokePattern and has no bounding rectangle");
-                    });
-                }
-                catch (TimeoutException ex)
-                {
-                    return McpToolResult.Error(ex.Message);
-                }
+                var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+                result = await ClickByConditionAsync(accessor, condition, $"AutomationId '{automationId}'", automationId);
+            }
+            else if (!string.IsNullOrEmpty(name))
+            {
+                var condition = new PropertyCondition(AutomationElement.NameProperty, name);
+                result = await ClickByConditionAsync(accessor, condition, $"Name '{name}'", name);
             }
             else
             {
@@ -583,12 +548,69 @@ namespace VsMcp.Extension.Tools
                     PerformClick(x.Value, y.Value);
                 });
 
-                return McpToolResult.Success(new
+                result = McpToolResult.Success(new
                 {
                     message = $"Clicked at screen coordinates ({x.Value}, {y.Value})",
                     x = x.Value,
                     y = y.Value
                 });
+            }
+
+            if (waitMs > 0 && !result.IsError)
+                await Task.Delay(Math.Min(waitMs, 10000));
+
+            return result;
+        }
+
+        private static async Task<McpToolResult> ClickByConditionAsync(
+            VsServiceAccessor accessor, Condition condition, string description, string identifier)
+        {
+            var pid = await accessor.RunOnUIThreadAsync(() => GetDebuggeeProcessId(accessor));
+            if (pid == 0)
+                return McpToolResult.Error("No debugged process found. Make sure debugging is active.");
+
+            try
+            {
+                return await RunUiaWithTimeoutAsync(() =>
+                {
+                    var element = FindFirstInProcess(pid, condition);
+
+                    if (element == null)
+                        return McpToolResult.Error($"Element with {description} not found");
+
+                    // Try InvokePattern first
+                    if (element.TryGetCurrentPattern(InvokePattern.Pattern, out object invokeObj))
+                    {
+                        ((InvokePattern)invokeObj).Invoke();
+                        return McpToolResult.Success(new
+                        {
+                            message = $"Clicked element with {description} using InvokePattern",
+                            identifier
+                        });
+                    }
+
+                    // Fall back to clicking at the center of the element's bounding rectangle
+                    var bounds = element.Current.BoundingRectangle;
+                    if (!bounds.IsEmpty)
+                    {
+                        int clickX = (int)(bounds.X + bounds.Width / 2);
+                        int clickY = (int)(bounds.Y + bounds.Height / 2);
+                        PerformClick(clickX, clickY);
+                        return McpToolResult.Success(new
+                        {
+                            message = $"Clicked element with {description} at ({clickX}, {clickY})",
+                            identifier,
+                            clickX,
+                            clickY
+                        });
+                    }
+
+                    return McpToolResult.Error($"Element with {description} does not support InvokePattern and has no bounding rectangle");
+                });
+            }
+            catch (TimeoutException ex)
+            {
+                return McpToolResult.Error(ex.Message);
             }
         }
 
