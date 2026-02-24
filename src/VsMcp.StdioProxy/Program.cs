@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -43,11 +44,20 @@ namespace VsMcp.StdioProxy
         private static string _baseUrl;
         private static int? _pid;
         private static string _sln;
+        private static List<string> _discoveredSlnCandidates;
+        private static string _connectedSlnPath;
 
         static async Task<int> Main(string[] args)
         {
             _pid = ParsePidArg(args);
             _sln = ParseSlnArg(args);
+
+            // Auto-detect .sln from CWD if not explicitly specified
+            if (_sln == null && _pid == null)
+            {
+                _sln = DiscoverSlnFromCwd();
+            }
+
             var pid = _pid;
             var sln = _sln;
 
@@ -304,6 +314,25 @@ namespace VsMcp.StdioProxy
         private static string BuildInitializeResponse(JToken id)
         {
             var toolCount = ToolDefinitionCache.GetToolCount();
+            var instructions = McpConstants.GetInstructions(toolCount);
+
+            if (_discoveredSlnCandidates != null && _discoveredSlnCandidates.Count > 1)
+            {
+                var slnList = string.Join(", ", _discoveredSlnCandidates.Select(s => Path.GetFileName(s)));
+                if (_sln != null)
+                {
+                    instructions += $" AUTO-CONNECTED: Connected to VS instance with {Path.GetFileName(_sln)}"
+                                  + $" (auto-detected from working directory). Other solutions found: {slnList}."
+                                  + " If the user needs a different solution, ask which one to use.";
+                }
+                else
+                {
+                    instructions += $" MULTIPLE SOLUTIONS FOUND near working directory: {slnList}."
+                                  + " None of these are currently open in Visual Studio."
+                                  + " Ask the user which solution they want to work with.";
+                }
+            }
+
             var result = new JObject
             {
                 ["protocolVersion"] = McpConstants.ProtocolVersion,
@@ -319,7 +348,7 @@ namespace VsMcp.StdioProxy
                     ["name"] = McpConstants.ServerName,
                     ["version"] = McpConstants.ServerVersion
                 },
-                ["instructions"] = McpConstants.GetInstructions(toolCount)
+                ["instructions"] = instructions
             };
 
             return BuildJsonRpcResult(id, result);
@@ -466,6 +495,74 @@ namespace VsMcp.StdioProxy
                     catch { return slnPath; }
                 }
             }
+            return null;
+        }
+
+        private static string DiscoverSlnFromCwd()
+        {
+            var cwd = Directory.GetCurrentDirectory();
+            Console.Error.WriteLine($"[VsMcp.StdioProxy] CWD: {cwd}");
+
+            var candidates = new List<string>();
+            var dir = cwd;
+
+            while (dir != null)
+            {
+                try
+                {
+                    var slnFiles = Directory.GetFiles(dir, "*.sln");
+                    foreach (var sln in slnFiles.OrderBy(f => f))
+                    {
+                        candidates.Add(Path.GetFullPath(sln));
+                    }
+                }
+                catch { /* access denied etc. */ }
+
+                var parent = Directory.GetParent(dir);
+                dir = parent?.FullName;
+            }
+
+            if (candidates.Count == 0)
+            {
+                Console.Error.WriteLine("[VsMcp.StdioProxy] No .sln files found from CWD.");
+                return null;
+            }
+
+            Console.Error.WriteLine($"[VsMcp.StdioProxy] Found .sln files: {string.Join(", ", candidates.Select(Path.GetFileName))}");
+
+            if (candidates.Count == 1)
+            {
+                Console.Error.WriteLine($"[VsMcp.StdioProxy] Auto-selected: {Path.GetFileName(candidates[0])} (only candidate)");
+                _connectedSlnPath = candidates[0];
+                return candidates[0];
+            }
+
+            // Multiple candidates - match against running VS instances
+            _discoveredSlnCandidates = candidates;
+            var instances = PortDiscovery.GetAllRunningInstances();
+
+            foreach (var sln in candidates)
+            {
+                foreach (var inst in instances)
+                {
+                    if (string.IsNullOrEmpty(inst.Sln))
+                        continue;
+                    try
+                    {
+                        var normalizedInst = Path.GetFullPath(inst.Sln);
+                        if (string.Equals(normalizedInst, sln, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.Error.WriteLine($"[VsMcp.StdioProxy] Auto-selected: {Path.GetFileName(sln)} (matched running VS instance, PID={inst.Pid})");
+                            _connectedSlnPath = sln;
+                            return sln;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            // No match found among running VS instances
+            Console.Error.WriteLine("[VsMcp.StdioProxy] No running VS instance matches the found .sln files.");
             return null;
         }
     }

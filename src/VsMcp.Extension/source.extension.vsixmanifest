@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VsMcp.Extension.a1b2c3d4-5e6f-7a8b-9c0d-e1f2a3b4c5d6" Version="0.1.4" Language="en-US" Publisher="dhq_boiler" />
+    <Identity Id="VsMcp.Extension.a1b2c3d4-5e6f-7a8b-9c0d-e1f2a3b4c5d6" Version="0.1.5" Language="en-US" Publisher="dhq_boiler" />
     <DisplayName>VS MCP Server</DisplayName>
     <Description xml:space="preserve">Model Context Protocol (MCP) server for Visual Studio. Enables AI agents to control Visual Studio features including debugging, building, and editing.</Description>
     <MoreInfo>https://github.com/dhq-boiler/Unofficial-VS-MCP</MoreInfo>

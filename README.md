@@ -247,19 +247,31 @@ StdioProxy selects which VS instance to connect to based on command-line argumen
 
 | Argument | Behavior |
 |----------|----------|
-| *(none)* | Auto-detect — connects to the most recently started VS instance |
+| *(none)* | Auto-detect — walks up from the current working directory to find `.sln` files and connects to the matching VS instance. Falls back to the most recently started VS instance if no `.sln` is found. |
 | `--sln <path>` | Connects to the VS instance that has the specified solution open |
 | `--pid <pid>` | Connects to the VS instance with the specified process ID |
 
+### CWD-based Auto-Detection
+
+When no `--sln` or `--pid` argument is provided, StdioProxy automatically discovers `.sln` files by walking up from the current working directory. This means that in most cases, **no explicit configuration is needed** — simply launching Claude Code from within a project directory is enough.
+
+| Scenario | Behavior |
+|----------|----------|
+| 1 `.sln` found | Automatically connects to the VS instance with that solution |
+| Multiple `.sln` found, 1 open in VS | Connects to the matching VS instance |
+| Multiple `.sln` found, multiple open in VS | Connects to the closest match (nearest to CWD) and includes a hint in the `initialize` response |
+| Multiple `.sln` found, none open in VS | Falls back to default behavior and includes a hint prompting the user to choose |
+| No `.sln` found | Falls back to the most recently started VS instance |
+
 ### Configuration Examples
 
-**Single instance** (auto-detect):
+**Single instance** (auto-detect, no extra config needed):
 
 ```
 claude mcp add vs-mcp -- "C:\Users\<USERNAME>\AppData\Local\VsMcp\bin\VsMcp.StdioProxy.exe"
 ```
 
-**Multiple instances** (solution-based):
+**Multiple instances** (explicit solution-based — useful when CWD auto-detection is not sufficient):
 
 ```json
 {
