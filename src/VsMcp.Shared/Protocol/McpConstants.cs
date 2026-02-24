@@ -38,7 +38,7 @@ namespace VsMcp.Shared.Protocol
                 + "FIRST STEP: Always call get_status FIRST to check which solution is currently open and the debugger state before performing any operations. "
                 + "WRONG SOLUTION: If get_status shows a different solution than expected, ask the user how to proceed — do NOT silently open another solution or launch a new VS instance. "
                 + "Options: close the current solution (solution_close then solution_open), or use 'dotnet build' CLI as a fallback. "
-                + "vs-mcp connects to one VS instance, so launching a second instance will NOT redirect the connection. "
+                + "vs-mcp supports multiple VS instances when configured with the --sln argument. Each StdioProxy connects to the VS instance that has the matching solution open. "
                 + "SOLUTION FILES: NEVER guess solution (.sln) or project file names. Always verify with file system tools (e.g. Glob for *.sln) before opening. "
                 + "FALLBACK: If vs-mcp cannot build (wrong solution open, VS busy, etc.), you may use 'dotnet build <path-to-sln>' as a command-line fallback. "
                 + "OFFLINE MODE: If a tool returns 'Visual Studio is not running', the error message includes a list of detected VS installations with their devenv.exe paths. "
