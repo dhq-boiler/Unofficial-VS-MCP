@@ -8,7 +8,7 @@
 
 ## Features
 
-VS MCP Server exposes **77 tools** across the following categories:
+VS MCP Server exposes **81 tools** across the following categories:
 
 | Category | Tools | Description |
 |----------|------:|-------------|
@@ -19,6 +19,7 @@ VS MCP Server exposes **77 tools** across the following categories:
 | Debugger | 14 | Start/stop/restart, attach, stepping, call stack, locals, threads, evaluate |
 | Breakpoints | 7 | Set/remove/list, conditional, hit count, function breakpoints |
 | Output & Diagnostics | 4 | Read/write output panes, error list, XAML binding errors |
+| Console | 4 | Read console output, send input/keys, get console info for debugged apps |
 | UI Automation | 10 | Capture screenshots, inspect UI trees, find/click/right-click/drag/invoke elements |
 | Advanced Debug | 22 | Watch, thread/process management, immediate window, registers, memory, parallel stacks |
 
@@ -108,6 +109,15 @@ VS MCP Server exposes **77 tools** across the following categories:
 | `output_read` | Read the content of a Visual Studio Output window pane |
 | `error_list_get` | Get all items from the Visual Studio Error List window |
 | `diagnostics_binding_errors` | Extract XAML/WPF binding errors from the Debug output pane |
+
+#### Console
+
+| Tool | Description |
+|------|-------------|
+| `console_read` | Read the console output buffer of a debugged console application |
+| `console_send_input` | Send text input (stdin) to the console of a debugged console application |
+| `console_send_keys` | Send special keys (Ctrl+C, Ctrl+Break, arrow keys, etc.) to a debugged console application |
+| `console_get_info` | Get console buffer size, cursor position, and window information of a debugged console application |
 
 #### UI Automation
 
