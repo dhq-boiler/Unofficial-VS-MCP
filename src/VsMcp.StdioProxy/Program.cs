@@ -41,13 +41,18 @@ namespace VsMcp.StdioProxy
         }
 
         private static string _baseUrl;
+        private static int? _pid;
+        private static string _sln;
 
         static async Task<int> Main(string[] args)
         {
-            var pid = ParsePidArg(args);
+            _pid = ParsePidArg(args);
+            _sln = ParseSlnArg(args);
+            var pid = _pid;
+            var sln = _sln;
 
             // Try to discover the port (quick attempts)
-            TryConnect(pid);
+            TryConnect(pid, sln);
 
             if (_baseUrl != null)
             {
@@ -67,7 +72,7 @@ namespace VsMcp.StdioProxy
 
             try
             {
-                await RelayLoopAsync(pid, cts.Token);
+                await RelayLoopAsync(pid, sln, cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -82,11 +87,11 @@ namespace VsMcp.StdioProxy
             return 0;
         }
 
-        private static void TryConnect(int? pid)
+        private static void TryConnect(int? pid, string sln)
         {
             for (int attempt = 0; attempt < 3; attempt++)
             {
-                var port = PortDiscovery.FindPort(pid);
+                var port = PortDiscovery.FindPort(pid, sln);
                 if (port.HasValue)
                 {
                     _baseUrl = $"http://localhost:{port.Value}";
@@ -100,7 +105,7 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static async Task RelayLoopAsync(int? pid, CancellationToken ct)
+        private static async Task RelayLoopAsync(int? pid, string sln, CancellationToken ct)
         {
             using var reader = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
             var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
@@ -172,7 +177,7 @@ namespace VsMcp.StdioProxy
                         // If not connected, try to reconnect before giving up
                         if (_baseUrl == null)
                         {
-                            TryReconnect(pid);
+                            TryReconnect(pid, sln);
                         }
                         if (_baseUrl != null)
                         {
@@ -216,9 +221,9 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static void TryReconnect(int? pid)
+        private static void TryReconnect(int? pid, string sln)
         {
-            var port = PortDiscovery.FindPort(pid);
+            var port = PortDiscovery.FindPort(pid, sln);
             if (port.HasValue)
             {
                 _baseUrl = $"http://localhost:{port.Value}";
@@ -249,7 +254,7 @@ namespace VsMcp.StdioProxy
                 await Console.Error.WriteLineAsync($"[VsMcp.StdioProxy] HTTP error: {ex.Message}");
 
                 // Connection lost - try to find a new port
-                var newPort = PortDiscovery.FindPort();
+                var newPort = PortDiscovery.FindPort(_pid, _sln);
                 if (newPort.HasValue)
                 {
                     _baseUrl = $"http://localhost:{newPort.Value}";
@@ -446,6 +451,20 @@ namespace VsMcp.StdioProxy
             {
                 if (args[i] == "--pid" && int.TryParse(args[i + 1], out var pid))
                     return pid;
+            }
+            return null;
+        }
+
+        private static string ParseSlnArg(string[] args)
+        {
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--sln")
+                {
+                    var slnPath = args[i + 1];
+                    try { return Path.GetFullPath(slnPath); }
+                    catch { return slnPath; }
+                }
             }
             return null;
         }

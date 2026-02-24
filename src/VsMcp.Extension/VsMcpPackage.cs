@@ -82,6 +82,8 @@ namespace VsMcp.Extension
                 if (dte.Solution != null && !string.IsNullOrEmpty(dte.Solution.FullName))
                 {
                     SolutionState = "Ready";
+                    _httpServer?.UpdateSolutionInPortFile(dte.Solution.FullName);
+                    Debug.WriteLine($"[VsMcp] Port file initialized with solution: {dte.Solution.FullName}");
                 }
             }
         }
@@ -90,6 +92,19 @@ namespace VsMcp.Extension
         {
             SolutionState = "Ready";
             Debug.WriteLine("[VsMcp] Solution state: Ready");
+
+            // Update port file with solution path
+            ThreadHelper.JoinableTaskFactory.Run(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                var dte = (EnvDTE80.DTE2)await GetServiceAsync(typeof(EnvDTE.DTE));
+                var slnPath = dte?.Solution?.FullName;
+                if (!string.IsNullOrEmpty(slnPath))
+                {
+                    _httpServer?.UpdateSolutionInPortFile(slnPath);
+                    Debug.WriteLine($"[VsMcp] Port file updated with solution: {slnPath}");
+                }
+            });
         }
 
         private void RegisterTools()
@@ -176,6 +191,10 @@ namespace VsMcp.Extension
         {
             SolutionState = "NoSolution";
             Debug.WriteLine("[VsMcp] Solution state: NoSolution");
+
+            // Clear solution path in port file
+            _httpServer?.UpdateSolutionInPortFile("");
+
             return VSConstants.S_OK;
         }
 

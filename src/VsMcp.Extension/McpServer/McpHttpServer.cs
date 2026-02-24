@@ -53,6 +53,12 @@ namespace VsMcp.Extension.McpServer
             Debug.WriteLine($"[VsMcp] HTTP server started on port {_port}");
         }
 
+        public void UpdateSolutionInPortFile(string slnPath)
+        {
+            var pid = Process.GetCurrentProcess().Id;
+            PortDiscovery.UpdateSolutionPath(pid, slnPath);
+        }
+
         public void Stop()
         {
             _cts?.Cancel();
