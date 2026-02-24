@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0] - 2026-02-25
+
+### Added
+- **Console I/O tools** — 4 new tools for interacting with the console window of debugged console applications
+  - `console_read`: Read the console output buffer of a debugged process
+  - `console_send_input`: Send text input (stdin) to a debugged console application
+  - `console_send_keys`: Send special keys (Ctrl+C, Ctrl+Break, arrow keys, etc.) to a debugged console application
+  - `console_get_info`: Get console buffer size, cursor position, and window information
+- New **Console** tool category in tool help
+
 ## [0.1.5] - 2026-02-24
 
 ### Added

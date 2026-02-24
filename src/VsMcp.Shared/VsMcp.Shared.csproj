@@ -4,7 +4,7 @@
     <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <RootNamespace>VsMcp.Shared</RootNamespace>
-    <Version>0.1.5</Version>
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
