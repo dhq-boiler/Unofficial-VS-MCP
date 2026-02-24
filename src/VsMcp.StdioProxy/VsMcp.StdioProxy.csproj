@@ -6,7 +6,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>VsMcp.StdioProxy</RootNamespace>
     <AssemblyName>VsMcp.StdioProxy</AssemblyName>
-    <Version>0.1.3</Version>
+    <Version>0.1.4</Version>
   </PropertyGroup>
 
   <ItemGroup>
