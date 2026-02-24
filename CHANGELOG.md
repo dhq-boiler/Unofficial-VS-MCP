@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5] - 2026-02-24
+
+### Added
+- **CWD-based .sln auto-detection** — StdioProxy walks up from the current working directory to find `.sln` files and auto-connects to the matching VS instance, eliminating the need for explicit `--sln` configuration in most cases
+- `PortDiscovery.GetAllRunningInstances()` for efficient bulk lookup of all running VS instances
+- When multiple `.sln` candidates are found, the `initialize` response includes hints for AI agent disambiguation
+- CWD auto-detection documentation in README.md
+
 ## [0.1.4] - 2026-02-24
 
 ### Added
