@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -72,6 +73,40 @@ namespace VsMcp.Shared
             }
             catch { /* best effort */ }
             return null;
+        }
+
+        /// <summary>
+        /// Returns all running VS instances with their port and solution path.
+        /// </summary>
+        public static List<(int Port, string Sln, int Pid)> GetAllRunningInstances()
+        {
+            var result = new List<(int Port, string Sln, int Pid)>();
+            var folder = GetPortFolder();
+            if (!Directory.Exists(folder))
+                return result;
+
+            var files = Directory.GetFiles(folder, $"{McpConstants.PortFilePrefix}*{McpConstants.PortFileSuffix}");
+            foreach (var file in files.OrderByDescending(f => File.GetLastWriteTime(f)))
+            {
+                var fileName = Path.GetFileNameWithoutExtension(file);
+                var pidStr = fileName.Substring(McpConstants.PortFilePrefix.Length);
+                if (!int.TryParse(pidStr, out var filePid))
+                    continue;
+
+                if (!IsProcessRunning(filePid))
+                {
+                    TryDeleteFile(file);
+                    continue;
+                }
+
+                var data = ReadPortFile(file);
+                if (data != null)
+                {
+                    result.Add((data.Port, data.Sln ?? "", filePid));
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
