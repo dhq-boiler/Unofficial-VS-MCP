@@ -237,6 +237,50 @@ Claude Code  ──stdio──▶  StdioProxy  ──HTTP──▶  VS Extension
 
 When Visual Studio is not running, the StdioProxy provides offline responses for basic protocol operations and returns cached tool definitions.
 
+## Multiple VS Instances
+
+VS MCP Server supports multiple Visual Studio instances running simultaneously. Each VS instance registers itself via a port file (`%LOCALAPPDATA%\VsMcp\server.<PID>.port`) containing its HTTP port and the currently open solution path.
+
+### Instance Selection
+
+StdioProxy selects which VS instance to connect to based on command-line arguments:
+
+| Argument | Behavior |
+|----------|----------|
+| *(none)* | Auto-detect — connects to the most recently started VS instance |
+| `--sln <path>` | Connects to the VS instance that has the specified solution open |
+| `--pid <pid>` | Connects to the VS instance with the specified process ID |
+
+### Configuration Examples
+
+**Single instance** (auto-detect):
+
+```
+claude mcp add vs-mcp -- "C:\Users\<USERNAME>\AppData\Local\VsMcp\bin\VsMcp.StdioProxy.exe"
+```
+
+**Multiple instances** (solution-based):
+
+```json
+{
+  "mcpServers": {
+    "vs-mcp-frontend": {
+      "command": "C:\\Users\\<USERNAME>\\AppData\\Local\\VsMcp\\bin\\VsMcp.StdioProxy.exe",
+      "args": ["--sln", "C:\\Projects\\Frontend\\Frontend.sln"]
+    },
+    "vs-mcp-backend": {
+      "command": "C:\\Users\\<USERNAME>\\AppData\\Local\\VsMcp\\bin\\VsMcp.StdioProxy.exe",
+      "args": ["--sln", "C:\\Projects\\Backend\\Backend.sln"]
+    }
+  }
+}
+```
+
+### Reconnection
+
+- If VS is restarted, StdioProxy automatically reconnects on the next `tools/call` request.
+- Stale port files from crashed or closed VS instances are cleaned up automatically during discovery.
+
 ## Contributing
 
 **Pull Requests are not accepted.**
