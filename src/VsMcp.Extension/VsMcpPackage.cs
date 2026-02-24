@@ -128,6 +128,7 @@ namespace VsMcp.Extension
             MemoryTools.Register(_toolRegistry, _serviceAccessor);
             ParallelDebugTools.Register(_toolRegistry, _serviceAccessor);
             DiagnosticsTools.Register(_toolRegistry, _serviceAccessor);
+            ConsoleTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         private void DeployStdioProxy()
