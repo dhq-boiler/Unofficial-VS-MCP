@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.4] - 2026-02-24
+
+### Added
+- **Multi-VS instance support** — StdioProxy `--sln` argument connects to the VS instance with a matching solution open
+- `--pid` argument for StdioProxy to target a specific VS process
+- Solution-aware port discovery with JSON port file format (`server.<PID>.port` now contains port + solution path)
+- Port file automatically updates on solution open/close events
+- Detailed tool list (77 tools across 19 categories) in README.md
+- Multi-VS instance configuration guide in README.md
+
+### Changed
+- MCP instructions updated to reflect multi-instance support (removed single-instance limitation warning)
+
+### Fixed
+- Typo in GitHub URLs: `Unoffcial` → `Unofficial` (README.md, vsixmanifest)
+
 ## [0.1.3] - 2026-02-23
 
 ### Added
