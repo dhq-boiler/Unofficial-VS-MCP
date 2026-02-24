@@ -2,7 +2,7 @@
 
 **Model Context Protocol (MCP) server for Visual Studio** — Enables AI agents like Claude Code to control Visual Studio features including debugging, building, editing, and UI automation.
 
-> This is a **beta release**. Feedback and bug reports are welcome on [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues).
+> This is a **beta release**. Feedback and bug reports are welcome on [GitHub Issues](https://github.com/dhq-boiler/Unofficial-VS-MCP/issues).
 
 > **100% AI Generated** — All code in this project was generated entirely by AI (Claude).
 
@@ -31,7 +31,7 @@ VS MCP Server exposes **75 tools** across the following categories:
 
 ## Installation
 
-1. Install the extension from [Visual Studio Marketplace](https://marketplace.visualstudio.com/) or download the `.vsix` file from [Releases](https://github.com/dhq-boiler/Unoffcial-VS-MCP/releases)
+1. Install the extension from [Visual Studio Marketplace](https://marketplace.visualstudio.com/) or download the `.vsix` file from [Releases](https://github.com/dhq-boiler/Unofficial-VS-MCP/releases)
 2. Restart Visual Studio
 3. The MCP server starts automatically when Visual Studio launches
 
@@ -72,7 +72,7 @@ When Visual Studio is not running, the StdioProxy provides offline responses for
 
 **Pull Requests are not accepted.**
 
-For feature requests and bug reports, please use [GitHub Issues](https://github.com/dhq-boiler/Unoffcial-VS-MCP/issues).
+For feature requests and bug reports, please use [GitHub Issues](https://github.com/dhq-boiler/Unofficial-VS-MCP/issues).
 
 ## License
 
