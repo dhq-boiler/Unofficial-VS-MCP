@@ -414,16 +414,50 @@ namespace VsMcp.Extension.Services
         {
             try
             {
-                var request = WebRequest.CreateHttp($"http://localhost:{port}/json/version");
+                // First get version info for browser detection
+                JObject versionInfo = null;
+                try
+                {
+                    var versionRequest = WebRequest.CreateHttp($"http://localhost:{port}/json/version");
+                    versionRequest.Timeout = 2000;
+                    using (var versionResponse = (HttpWebResponse)await versionRequest.GetResponseAsync())
+                    using (var versionReader = new StreamReader(versionResponse.GetResponseStream()))
+                    {
+                        versionInfo = JObject.Parse(await versionReader.ReadToEndAsync());
+                    }
+                }
+                catch { }
+
+                // Get page-level target WebSocket URL from /json (target list)
+                var request = WebRequest.CreateHttp($"http://localhost:{port}/json");
                 request.Timeout = 2000;
                 using (var response = (HttpWebResponse)await request.GetResponseAsync())
                 using (var reader = new StreamReader(response.GetResponseStream()))
                 {
                     var json = await reader.ReadToEndAsync();
-                    var obj = JObject.Parse(json);
-                    var wsUrl = obj.Value<string>("webSocketDebuggerUrl");
-                    return (wsUrl, obj);
+                    var targets = JArray.Parse(json);
+
+                    // Find the first "page" type target
+                    foreach (var target in targets)
+                    {
+                        var type = target.Value<string>("type");
+                        if (string.Equals(type, "page", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var wsUrl = target.Value<string>("webSocketDebuggerUrl");
+                            if (!string.IsNullOrEmpty(wsUrl))
+                                return (wsUrl, versionInfo);
+                        }
+                    }
+
+                    // Fallback: use browser-level WebSocket URL
+                    if (versionInfo != null)
+                    {
+                        var browserWsUrl = versionInfo.Value<string>("webSocketDebuggerUrl");
+                        return (browserWsUrl, versionInfo);
+                    }
                 }
+
+                return (null, null);
             }
             catch
             {
