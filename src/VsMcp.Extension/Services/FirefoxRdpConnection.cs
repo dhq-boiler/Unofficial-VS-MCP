@@ -41,6 +41,9 @@ namespace VsMcp.Extension.Services
         private bool _networkEnabled;
         private int _nextRequestId;
 
+        // For evaluateJSAsync: the next evaluation result TCS (registered before sending command)
+        private volatile TaskCompletionSource<JObject> _pendingEvalResult;
+
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
         private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
@@ -392,15 +395,42 @@ namespace VsMcp.Extension.Services
             if (_consoleActor == null)
                 throw new Exception("Console actor not available. Tab may not be attached.");
 
-            var requestType = awaitPromise ? "evaluateJSAsync" : "evaluateJSAsync";
-            var result = await SendRdpAsync(_consoleActor, "evaluateJSAsync", new JObject
+            // Register TCS BEFORE sending command to avoid race with evaluationResult event
+            var evalTcs = new TaskCompletionSource<JObject>();
+            _pendingEvalResult = evalTcs;
+
+            var initialResponse = await SendRdpAsync(_consoleActor, "evaluateJSAsync", new JObject
             {
                 ["text"] = expression
             });
 
+            // evaluateJSAsync returns a resultID; the actual result comes as an evaluationResult event
+            var resultId = initialResponse.Value<string>("resultID");
+
+            JObject result;
+            if (resultId != null)
+            {
+                using (var timeoutCts = new CancellationTokenSource(CommandTimeout))
+                using (timeoutCts.Token.Register(() =>
+                {
+                    _pendingEvalResult = null;
+                    evalTcs.TrySetException(new TimeoutException("Waiting for evaluationResult timed out."));
+                }))
+                {
+                    result = await evalTcs.Task;
+                }
+            }
+            else
+            {
+                _pendingEvalResult = null;
+                // Older Firefox: result is inline
+                result = initialResponse;
+            }
+
             // Check for exception
+            var hasException = result["hasException"]?.Value<bool>() == true;
             var exception = result["exception"];
-            if (exception != null && exception.Type != JTokenType.Null)
+            if (hasException && exception != null && exception.Type != JTokenType.Null)
             {
                 var exMsg = exception.Value<string>("message")
                     ?? exception.Value<string>("preview")
@@ -421,12 +451,23 @@ namespace VsMcp.Extension.Services
                 return new JsEvalResult { IsError = false, Value = "undefined", Type = "undefined" };
             }
 
+            // Handle primitive result values (string, number, boolean) returned directly
+            if (resultToken.Type == JTokenType.String)
+                return new JsEvalResult { IsError = false, Value = resultToken.Value<string>(), Type = "string" };
+            if (resultToken.Type == JTokenType.Integer || resultToken.Type == JTokenType.Float)
+                return new JsEvalResult { IsError = false, Value = resultToken.ToString(), Type = "number" };
+            if (resultToken.Type == JTokenType.Boolean)
+                return new JsEvalResult { IsError = false, Value = resultToken.ToString().ToLower(), Type = "boolean" };
+            if (resultToken.Type == JTokenType.Null)
+                return new JsEvalResult { IsError = false, Value = "null", Type = "null" };
+
+            // For grip objects (JObject), check the type field
             var type = resultToken.Value<string>("type") ?? "undefined";
 
             if (type == "undefined")
                 return new JsEvalResult { IsError = false, Value = "undefined", Type = type };
 
-            // For primitive types, the value is directly available
+            // For primitive types wrapped in grip, the value is directly available
             var value = resultToken["value"] ?? resultToken["text"];
             if (value != null)
             {
@@ -835,10 +876,20 @@ namespace VsMcp.Extension.Services
                         {
                             foreach (var arg in arguments)
                             {
-                                var val = arg.Value<string>("value")
-                                    ?? arg.Value<string>("text")
-                                    ?? arg.Value<string>("preview")
-                                    ?? arg.ToString(Formatting.None);
+                                string val;
+                                if (arg is JValue jv)
+                                {
+                                    // Plain primitive value (string, number, etc.)
+                                    val = jv.Value?.ToString() ?? "null";
+                                }
+                                else
+                                {
+                                    // Grip object with value/text/preview properties
+                                    val = arg.Value<string>("value")
+                                        ?? arg.Value<string>("text")
+                                        ?? arg.Value<string>("preview")
+                                        ?? arg.ToString(Formatting.None);
+                                }
                                 textParts.Add(val);
                             }
                         }
@@ -898,6 +949,15 @@ namespace VsMcp.Extension.Services
                                 }
                             }
                         }
+                    }
+                    break;
+
+                case "evaluationResult":
+                    {
+                        // evaluateJSAsync sends the actual result as a separate evaluationResult event
+                        var evalTcs = _pendingEvalResult;
+                        _pendingEvalResult = null;
+                        evalTcs?.TrySetResult(msg);
                     }
                     break;
             }
