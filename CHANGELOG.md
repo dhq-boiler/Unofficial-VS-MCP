@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0] - 2026-02-26
+
+### Added
+- **Web debugging tools** — 18 new tools for browser automation via Chrome DevTools Protocol (CDP) and Firefox Remote Debug Protocol (RDP)
+  - `web_connect`: Connect to a browser for web debugging (Chrome/Edge via CDP, Firefox via RDP)
+  - `web_disconnect`: Disconnect from the browser connection
+  - `web_status`: Get the current browser connection status
+  - `web_navigate`: Navigate the browser to a URL
+  - `web_screenshot`: Capture a screenshot of the current page
+  - `web_dom_get`: Get the DOM tree of the current page
+  - `web_dom_query`: Query DOM elements using a CSS selector
+  - `web_dom_get_html`: Get the outerHTML of a DOM element
+  - `web_dom_get_attributes`: Get all attributes of a DOM element
+  - `web_console_enable`: Start collecting browser console messages
+  - `web_console_get`: Get collected browser console messages
+  - `web_console_clear`: Clear the collected console message buffer
+  - `web_js_execute`: Execute JavaScript in the browser page context
+  - `web_network_enable`: Start monitoring network requests and responses
+  - `web_network_get`: Get captured network requests/responses
+  - `web_network_clear`: Clear the captured network entry buffer
+  - `web_element_click`: Click a DOM element found by CSS selector
+  - `web_element_set_value`: Set the value of an input element found by CSS selector
+- `IBrowserConnection` interface for protocol abstraction (CDP / Firefox RDP)
+- New **Web** tool category in tool help with CDP and Firefox RDP connection guidance
+
+### Fixed
+- CDP connecting to browser-level target instead of page-level target
+- Firefox RDP connection, tab attachment, and message routing
+- Firefox RDP JavaScript evaluation and console message parsing
+
 ## [0.2.0] - 2026-02-25
 
 ### Added
