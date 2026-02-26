@@ -55,9 +55,10 @@ namespace VsMcp.Shared.Protocol
                 + "DRAG AND HIT-TESTING: ui_drag sends Win32 mouse events, so WPF visual hit-testing applies. "
                 + "If a visual element (e.g. Polyline, Border) overlaps the drag start position, the event goes to that element instead of the intended target. "
                 + "When drag does not work as expected, use ui_get_tree or ui_find_elements to check what element is at the start position. "
-                + "WEB DEBUGGING: Use web_connect to connect to Chrome/Edge via CDP. "
-                + "The browser must be started with --remote-debugging-port (e.g. chrome --remote-debugging-port=9222). "
-                + "Auto-detection scans ports 9222-9229. "
+                + "WEB DEBUGGING: Use web_connect to connect to Chrome/Edge (via CDP) or Firefox (via RDP). "
+                + "Chrome/Edge: start with --remote-debugging-port (e.g. chrome --remote-debugging-port=9222). Auto-detection scans ports 9222-9229. "
+                + "Firefox: start with -start-debugger-server (e.g. firefox -start-debugger-server 6000). Requires devtools.debugger.remote-enabled=true in about:config. Auto-detection scans ports 6000-6009. "
+                + "Use web_connect with browser='auto' (default) to auto-detect, or browser='chrome'/'firefox' to specify. "
                 + "Call web_console_enable / web_network_enable to start monitoring before navigating. "
                 + "Use web_js_execute for JavaScript evaluation, web_dom_query for CSS selectors, web_screenshot for page captures.";
         }
