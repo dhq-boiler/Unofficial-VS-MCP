@@ -129,6 +129,7 @@ namespace VsMcp.Extension
             ParallelDebugTools.Register(_toolRegistry, _serviceAccessor);
             DiagnosticsTools.Register(_toolRegistry, _serviceAccessor);
             ConsoleTools.Register(_toolRegistry, _serviceAccessor);
+            WebTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         private void DeployStdioProxy()
@@ -223,6 +224,7 @@ namespace VsMcp.Extension
                         solution?.UnadviseSolutionEvents(_solutionEventsCookie);
                     });
                 }
+                WebTools.Shutdown();
                 _httpServer?.Dispose();
             }
             base.Dispose(disposing);
