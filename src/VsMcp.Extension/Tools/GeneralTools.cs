@@ -115,6 +115,25 @@ namespace VsMcp.Extension.Tools
             { "console_send_input", "Console" },
             { "console_send_keys", "Console" },
             { "console_get_info", "Console" },
+            // Web (CDP)
+            { "web_connect", "Web" },
+            { "web_disconnect", "Web" },
+            { "web_status", "Web" },
+            { "web_navigate", "Web" },
+            { "web_screenshot", "Web" },
+            { "web_dom_get", "Web" },
+            { "web_dom_query", "Web" },
+            { "web_dom_get_html", "Web" },
+            { "web_dom_get_attributes", "Web" },
+            { "web_console_enable", "Web" },
+            { "web_console_get", "Web" },
+            { "web_console_clear", "Web" },
+            { "web_js_execute", "Web" },
+            { "web_network_enable", "Web" },
+            { "web_network_get", "Web" },
+            { "web_network_clear", "Web" },
+            { "web_element_click", "Web" },
+            { "web_element_set_value", "Web" },
         };
 
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
@@ -162,7 +181,7 @@ namespace VsMcp.Extension.Tools
                 });
             }
 
-            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "UI", "Other" };
+            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "Web", "UI", "Other" };
             var ordered = new List<object>();
             foreach (var cat in categoryOrder)
             {
@@ -175,7 +194,7 @@ namespace VsMcp.Extension.Tools
             return Task.FromResult(McpToolResult.Success(new
             {
                 totalTools = allTools.Count,
-                tips = "Use build_solution instead of MSBuild CLI. Use debug_start instead of pressing F5. Use get_status instead of curl. Use output_read to read Build/Debug output panes.",
+                tips = "Use build_solution instead of MSBuild CLI. Use debug_start instead of pressing F5. Use get_status instead of curl. Use output_read to read Build/Debug output panes. Use web_connect to connect to Chrome/Edge via CDP for web debugging.",
                 categories = ordered
             }));
         }
