@@ -134,6 +134,7 @@ namespace VsMcp.Extension
             NuGetTools.Register(_toolRegistry, _serviceAccessor);
             NavigationTools.Register(_toolRegistry, _serviceAccessor);
             SolutionExplorerTools.Register(_toolRegistry, _serviceAccessor);
+            EditPreviewTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         private void DeployStdioProxy()
