@@ -83,11 +83,12 @@ namespace VsMcp.Extension.Services
             _stream = _tcp.GetStream();
             BrowserUrl = $"tcp://localhost:{connectedPort}";
 
-            // Start receive loop
-            _ = Task.Run(() => ReceiveLoopAsync());
-
             // Read root greeting (the first message Firefox sends upon connection)
+            // Must be done BEFORE starting the receive loop to avoid concurrent stream reads.
             var greeting = await ReceiveFirstMessageAsync();
+
+            // Start receive loop after greeting is consumed
+            _ = Task.Run(() => ReceiveLoopAsync());
             _rootActor = greeting.Value<string>("from");
 
             if (string.IsNullOrEmpty(_rootActor))
@@ -549,23 +550,56 @@ namespace VsMcp.Extension.Services
                 throw new Exception("No tabs found in Firefox. Open a tab first.");
 
             // Select the first (or selected) tab
-            var selectedTab = listResult["selected"]?.Value<int>() ?? 0;
+            int selectedTab = 0;
+            var selectedToken = listResult["selected"];
+            if (selectedToken != null && selectedToken.Type == JTokenType.Integer)
+                selectedTab = selectedToken.Value<int>();
             var tab = tabs[Math.Min(selectedTab, tabs.Count - 1)] as JObject;
 
-            _tabActor = tab.Value<string>("actor");
-            _consoleActor = tab.Value<string>("consoleActor");
-
-            if (string.IsNullOrEmpty(_tabActor))
+            var tabDescriptorActor = tab.Value<string>("actor");
+            if (string.IsNullOrEmpty(tabDescriptorActor))
                 throw new Exception("Tab actor not found in listTabs response");
 
-            // Attach to tab
-            var attachResult = await SendRdpAsync(_tabActor, "attach");
+            // Modern Firefox uses tabDescriptor actors; call getTarget to get the actual target
+            JObject targetInfo;
+            try
+            {
+                targetInfo = await SendRdpAsync(tabDescriptorActor, "getTarget");
+            }
+            catch
+            {
+                // Fallback for older Firefox: tab actor IS the target
+                targetInfo = tab;
+            }
 
-            // The attach response may contain additional actor info
-            if (string.IsNullOrEmpty(_consoleActor))
-                _consoleActor = attachResult.Value<string>("consoleActor");
+            // Extract target actor from the response
+            var targetFrame = targetInfo["frame"] as JObject;
+            _tabActor = targetFrame?.Value<string>("actor")
+                ?? targetInfo.Value<string>("actor")
+                ?? tabDescriptorActor;
+            _consoleActor = targetFrame?.Value<string>("consoleActor")
+                ?? targetInfo.Value<string>("consoleActor")
+                ?? tab.Value<string>("consoleActor");
 
-            _inspectorActor = tab.Value<string>("inspectorActor");
+            // Attach to the target
+            try
+            {
+                var attachResult = await SendRdpAsync(_tabActor, "attach");
+
+                // The attach response may contain additional actor info
+                if (string.IsNullOrEmpty(_consoleActor))
+                    _consoleActor = attachResult.Value<string>("consoleActor");
+
+                _inspectorActor = attachResult.Value<string>("inspectorActor")
+                    ?? targetFrame?.Value<string>("inspectorActor")
+                    ?? tab.Value<string>("inspectorActor");
+            }
+            catch
+            {
+                // Some Firefox versions auto-attach; extract actors from target info
+                _inspectorActor = targetFrame?.Value<string>("inspectorActor")
+                    ?? tab.Value<string>("inspectorActor");
+            }
         }
 
         private async Task EnsureInspectorAsync()
@@ -735,16 +769,30 @@ namespace VsMcp.Extension.Services
             }
         }
 
+        // Known RDP event types that should NOT consume pending command responses
+        private static readonly HashSet<string> _eventTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "consoleAPICall", "pageError", "networkEvent", "networkEventUpdate",
+            "tabNavigated", "tabDetached", "tabListChanged",
+            "resource-available-form", "resource-updated-form", "resource-destroyed-form",
+            "propertyChange", "newSource", "updatedSource",
+            "evaluationResult"
+        };
+
         private void HandleRdpMessage(JObject msg)
         {
             var from = msg.Value<string>("from") ?? "";
             var type = msg.Value<string>("type") ?? "";
 
+            // Route known events directly to event handler without consuming pending entries
+            if (_eventTypes.Contains(type))
+            {
+                HandleRdpEvent(type, msg);
+                return;
+            }
+
             // Try to match pending requests
             // RDP responses come back from the actor we sent to
-            bool matched = false;
-
-            // Try matching by actor:type:requestId (most specific)
             var keysToTry = _pending.Keys.Where(k => k.StartsWith(from + ":")).ToList();
             foreach (var key in keysToTry)
             {
@@ -763,16 +811,12 @@ namespace VsMcp.Extension.Services
                     {
                         tcs.TrySetResult(msg);
                     }
-                    matched = true;
-                    break;
+                    return;
                 }
             }
 
-            // Handle events (console, network, etc.)
-            if (!matched || type == "consoleAPICall" || type == "networkEvent" || type == "networkEventUpdate")
-            {
-                HandleRdpEvent(type, msg);
-            }
+            // Unmatched message - treat as event
+            HandleRdpEvent(type, msg);
         }
 
         private void HandleRdpEvent(string type, JObject msg)
