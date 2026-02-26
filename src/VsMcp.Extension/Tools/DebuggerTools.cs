@@ -62,24 +62,12 @@ namespace VsMcp.Extension.Tools
 
             registry.Register(
                 new McpToolDefinition(
-                    "debug_step_over",
-                    "Step over the current line (F10)",
-                    SchemaBuilder.Empty()),
-                args => DebugStepOverAsync(accessor));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "debug_step_into",
-                    "Step into the current function call (F11)",
-                    SchemaBuilder.Empty()),
-                args => DebugStepIntoAsync(accessor));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "debug_step_out",
-                    "Step out of the current function (Shift+F11)",
-                    SchemaBuilder.Empty()),
-                args => DebugStepOutAsync(accessor));
+                    "debug_step",
+                    "Step through code. direction: over (F10), into (F11), or out (Shift+F11)",
+                    SchemaBuilder.Create()
+                        .AddEnum("direction", "Step direction", new[] { "over", "into", "out" }, required: true)
+                        .Build()),
+                args => DebugStepAsync(accessor, args));
 
             registry.Register(
                 new McpToolDefinition(
@@ -261,8 +249,12 @@ namespace VsMcp.Extension.Tools
             });
         }
 
-        private static async Task<McpToolResult> DebugStepOverAsync(VsServiceAccessor accessor)
+        private static async Task<McpToolResult> DebugStepAsync(VsServiceAccessor accessor, JObject args)
         {
+            var direction = args.Value<string>("direction");
+            if (string.IsNullOrEmpty(direction))
+                return McpToolResult.Error("Parameter 'direction' is required");
+
             return await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
@@ -271,38 +263,20 @@ namespace VsMcp.Extension.Tools
                 if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
                     return McpToolResult.Error("Debugger must be in Break mode to step");
 
-                dte.Debugger.StepOver(false);
-                return McpToolResult.Success("Stepped over");
-            });
-        }
-
-        private static async Task<McpToolResult> DebugStepIntoAsync(VsServiceAccessor accessor)
-        {
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                    .Run(() => accessor.GetDteAsync());
-
-                if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
-                    return McpToolResult.Error("Debugger must be in Break mode to step");
-
-                dte.Debugger.StepInto(false);
-                return McpToolResult.Success("Stepped into");
-            });
-        }
-
-        private static async Task<McpToolResult> DebugStepOutAsync(VsServiceAccessor accessor)
-        {
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                    .Run(() => accessor.GetDteAsync());
-
-                if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
-                    return McpToolResult.Error("Debugger must be in Break mode to step");
-
-                dte.Debugger.StepOut(false);
-                return McpToolResult.Success("Stepped out");
+                switch (direction)
+                {
+                    case "over":
+                        dte.Debugger.StepOver(false);
+                        return McpToolResult.Success("Stepped over");
+                    case "into":
+                        dte.Debugger.StepInto(false);
+                        return McpToolResult.Success("Stepped into");
+                    case "out":
+                        dte.Debugger.StepOut(false);
+                        return McpToolResult.Success("Stepped out");
+                    default:
+                        return McpToolResult.Error($"Unknown direction: '{direction}'. Use 'over', 'into', or 'out'.");
+                }
             });
         }
 
