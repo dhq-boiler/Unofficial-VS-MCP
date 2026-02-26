@@ -134,6 +134,10 @@ namespace VsMcp.Extension.Tools
             { "web_network_clear", "Web" },
             { "web_element_click", "Web" },
             { "web_element_set_value", "Web" },
+            // Test
+            { "test_discover", "Test" },
+            { "test_run", "Test" },
+            { "test_results", "Test" },
         };
 
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
@@ -181,7 +185,7 @@ namespace VsMcp.Extension.Tools
                 });
             }
 
-            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "Web", "UI", "Other" };
+            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "Web", "UI", "Test", "Other" };
             var ordered = new List<object>();
             foreach (var cat in categoryOrder)
             {

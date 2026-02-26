@@ -130,6 +130,7 @@ namespace VsMcp.Extension
             DiagnosticsTools.Register(_toolRegistry, _serviceAccessor);
             ConsoleTools.Register(_toolRegistry, _serviceAccessor);
             WebTools.Register(_toolRegistry, _serviceAccessor);
+            TestTools.Register(_toolRegistry, _serviceAccessor);
         }
 
         private void DeployStdioProxy()
