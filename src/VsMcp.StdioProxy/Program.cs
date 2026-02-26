@@ -44,6 +44,8 @@ namespace VsMcp.StdioProxy
         private static string _baseUrl;
         private static int? _pid;
         private static string _sln;
+        private static string _toolsArg;
+        private static HashSet<string> _toolFilter;
         private static List<string> _discoveredSlnCandidates;
         private static string _connectedSlnPath;
 
@@ -51,6 +53,8 @@ namespace VsMcp.StdioProxy
         {
             _pid = ParsePidArg(args);
             _sln = ParseSlnArg(args);
+            _toolsArg = ParseToolsArg(args);
+            _toolFilter = ToolCategoryMap.ResolveToolFilter(_toolsArg);
 
             // Auto-detect .sln from CWD if not explicitly specified
             if (_sln == null && _pid == null)
@@ -173,6 +177,11 @@ namespace VsMcp.StdioProxy
                         if (_baseUrl != null)
                         {
                             response = await TryRelayAsync(line, id, ct);
+                            // Apply tool filter to relayed response
+                            if (response != null && _toolFilter != null)
+                            {
+                                response = FilterRelayedToolsList(response);
+                            }
                         }
                         if (response == null)
                         {
@@ -313,7 +322,7 @@ namespace VsMcp.StdioProxy
 
         private static string BuildInitializeResponse(JToken id)
         {
-            var toolCount = ToolDefinitionCache.GetToolCount();
+            var toolCount = GetFilteredToolCount();
             var instructions = McpConstants.GetInstructions(toolCount);
 
             if (_discoveredSlnCandidates != null && _discoveredSlnCandidates.Count > 1)
@@ -374,7 +383,50 @@ namespace VsMcp.StdioProxy
                 result = new JObject { ["tools"] = new JArray() };
             }
 
+            FilterToolsList(result);
             return BuildJsonRpcResult(id, result);
+        }
+
+        private static string FilterRelayedToolsList(string responseJson)
+        {
+            try
+            {
+                var response = JObject.Parse(responseJson);
+                var result = response["result"] as JObject;
+                if (result != null)
+                {
+                    FilterToolsList(result);
+                }
+                return response.ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch
+            {
+                return responseJson;
+            }
+        }
+
+        private static void FilterToolsList(JObject result)
+        {
+            if (_toolFilter == null) return;
+
+            var tools = result["tools"] as JArray;
+            if (tools == null) return;
+
+            var filtered = new JArray();
+            foreach (var tool in tools)
+            {
+                var name = tool["name"]?.Value<string>();
+                if (name != null && _toolFilter.Contains(name))
+                    filtered.Add(tool);
+            }
+            result["tools"] = filtered;
+        }
+
+        private static int GetFilteredToolCount()
+        {
+            if (_toolFilter != null)
+                return _toolFilter.Count;
+            return ToolDefinitionCache.GetToolCount();
         }
 
         private static string BuildToolsCallOfflineError(JToken id)
@@ -494,6 +546,16 @@ namespace VsMcp.StdioProxy
                     try { return Path.GetFullPath(slnPath); }
                     catch { return slnPath; }
                 }
+            }
+            return null;
+        }
+
+        private static string ParseToolsArg(string[] args)
+        {
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--tools")
+                    return args[i + 1];
             }
             return null;
         }
