@@ -17,7 +17,7 @@ namespace VsMcp.Extension.Services
     /// <summary>
     /// Manages a Chrome DevTools Protocol (CDP) WebSocket connection.
     /// </summary>
-    public sealed class CdpConnection : IDisposable
+    public sealed class CdpConnection : IBrowserConnection
     {
         private ClientWebSocket _ws;
         private CancellationTokenSource _cts;
@@ -35,6 +35,7 @@ namespace VsMcp.Extension.Services
 
         public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
         public string BrowserUrl { get; private set; }
+        public BrowserType BrowserType { get; private set; } = BrowserType.Unknown;
         public int ConsoleMessageCount => _consoleMessages.Count;
         public int NetworkEntryCount => _networkEntries.Count;
         public bool ConsoleEnabled => _consoleEnabled;
@@ -51,10 +52,11 @@ namespace VsMcp.Extension.Services
                 throw new InvalidOperationException("Already connected. Disconnect first.");
 
             string wsUrl = null;
+            JObject versionInfo = null;
 
             if (port.HasValue)
             {
-                wsUrl = await TryGetWebSocketUrlAsync(port.Value);
+                (wsUrl, versionInfo) = await TryGetWebSocketUrlAsync(port.Value);
                 if (wsUrl == null)
                     throw new Exception($"No browser found on port {port.Value}. Ensure the browser was started with --remote-debugging-port={port.Value}");
             }
@@ -62,7 +64,7 @@ namespace VsMcp.Extension.Services
             {
                 for (int p = 9222; p <= 9229; p++)
                 {
-                    wsUrl = await TryGetWebSocketUrlAsync(p);
+                    (wsUrl, versionInfo) = await TryGetWebSocketUrlAsync(p);
                     if (wsUrl != null) break;
                 }
                 if (wsUrl == null)
@@ -75,10 +77,20 @@ namespace VsMcp.Extension.Services
             await _ws.ConnectAsync(new Uri(wsUrl), _cts.Token);
             BrowserUrl = wsUrl;
 
+            // Detect browser type from version info
+            if (versionInfo != null)
+            {
+                var browser = versionInfo.Value<string>("Browser") ?? "";
+                if (browser.IndexOf("Edge", StringComparison.OrdinalIgnoreCase) >= 0)
+                    BrowserType = BrowserType.Edge;
+                else if (browser.IndexOf("Chrome", StringComparison.OrdinalIgnoreCase) >= 0)
+                    BrowserType = BrowserType.Chrome;
+            }
+
             // Start receive loop
             _ = Task.Run(() => ReceiveLoopAsync());
 
-            Debug.WriteLine($"[VsMcp.Web] Connected to {wsUrl}");
+            Debug.WriteLine($"[VsMcp.Web] Connected to {wsUrl} ({BrowserType})");
         }
 
         /// <summary>
@@ -103,6 +115,7 @@ namespace VsMcp.Extension.Services
             _ws = null;
             _cts = null;
             BrowserUrl = null;
+            BrowserType = BrowserType.Unknown;
 
             // Fail all pending commands
             foreach (var kvp in _pending)
@@ -155,8 +168,9 @@ namespace VsMcp.Extension.Services
 
         #region Console
 
-        public void EnableConsole()
+        public async Task EnableConsoleAsync()
         {
+            await SendCommandAsync("Runtime.enable");
             _consoleEnabled = true;
         }
 
@@ -177,8 +191,9 @@ namespace VsMcp.Extension.Services
 
         #region Network
 
-        public void EnableNetwork()
+        public async Task EnableNetworkAsync()
         {
+            await SendCommandAsync("Network.enable");
             _networkEnabled = true;
         }
 
@@ -200,9 +215,202 @@ namespace VsMcp.Extension.Services
 
         #endregion
 
+        #region High-level methods
+
+        public async Task<NavigateResult> NavigateAsync(string url, bool waitForLoad)
+        {
+            if (waitForLoad)
+                await SendCommandAsync("Page.enable");
+
+            var navResult = await SendCommandAsync("Page.navigate", new JObject { ["url"] = url });
+
+            if (waitForLoad)
+            {
+                try
+                {
+                    await SendCommandAsync("Runtime.evaluate", new JObject
+                    {
+                        ["expression"] = "new Promise(r => { if (document.readyState === 'complete') r(); else window.addEventListener('load', r, {once:true}); })",
+                        ["awaitPromise"] = true
+                    });
+                }
+                catch { }
+            }
+
+            return new NavigateResult
+            {
+                Url = url,
+                FrameId = navResult?.Value<string>("frameId") ?? ""
+            };
+        }
+
+        public async Task<ScreenshotResult> CaptureScreenshotAsync(string format, int? quality)
+        {
+            var parms = new JObject { ["format"] = format ?? "png" };
+            if (format == "jpeg")
+                parms["quality"] = quality ?? 80;
+
+            var result = await SendCommandAsync("Page.captureScreenshot", parms);
+            var data = result.Value<string>("data");
+
+            var mimeType = format == "jpeg" ? "image/jpeg" : "image/png";
+            return new ScreenshotResult { Base64Data = data, MimeType = mimeType };
+        }
+
+        public async Task<string> GetDocumentAsync(int depth)
+        {
+            var result = await SendCommandAsync("DOM.getDocument", new JObject { ["depth"] = depth });
+            var root = result["root"];
+            return root?.ToString(Formatting.Indented) ?? "{}";
+        }
+
+        public async Task<List<DomNodeInfo>> QuerySelectorAllAsync(string selector)
+        {
+            int rootId = await GetDocumentRootAsync();
+            var result = await SendCommandAsync("DOM.querySelectorAll", new JObject
+            {
+                ["nodeId"] = rootId,
+                ["selector"] = selector
+            });
+
+            var nodeIds = result["nodeIds"] as JArray ?? new JArray();
+            var nodes = new List<DomNodeInfo>();
+
+            foreach (var nodeIdToken in nodeIds)
+            {
+                int nodeId = nodeIdToken.Value<int>();
+                if (nodeId == 0) continue;
+
+                try
+                {
+                    var desc = await SendCommandAsync("DOM.describeNode", new JObject
+                    {
+                        ["nodeId"] = nodeId
+                    });
+                    var node = desc["node"];
+                    nodes.Add(new DomNodeInfo
+                    {
+                        NodeId = nodeId,
+                        NodeName = node?.Value<string>("nodeName"),
+                        NodeType = node?.Value<int>("nodeType") ?? 0,
+                        Attributes = node?["attributes"]
+                    });
+                }
+                catch
+                {
+                    nodes.Add(new DomNodeInfo { NodeId = nodeId });
+                }
+            }
+
+            return nodes;
+        }
+
+        public async Task<string> GetOuterHtmlAsync(string selector)
+        {
+            int nodeId = await QuerySelectorNodeAsync(selector);
+            if (nodeId == 0) return null;
+
+            var result = await SendCommandAsync("DOM.getOuterHTML", new JObject
+            {
+                ["nodeId"] = nodeId
+            });
+            return result.Value<string>("outerHTML") ?? "";
+        }
+
+        public async Task<Dictionary<string, string>> GetAttributesAsync(string selector)
+        {
+            int nodeId = await QuerySelectorNodeAsync(selector);
+            if (nodeId == 0) return null;
+
+            var result = await SendCommandAsync("DOM.getAttributes", new JObject
+            {
+                ["nodeId"] = nodeId
+            });
+
+            var attrs = result["attributes"] as JArray ?? new JArray();
+            var dict = new Dictionary<string, string>();
+            for (int i = 0; i < attrs.Count - 1; i += 2)
+            {
+                dict[attrs[i].Value<string>()] = attrs[i + 1].Value<string>();
+            }
+            return dict;
+        }
+
+        public async Task<JsEvalResult> EvaluateJsAsync(string expression, bool awaitPromise)
+        {
+            var parms = new JObject
+            {
+                ["expression"] = expression,
+                ["returnByValue"] = true
+            };
+            if (awaitPromise)
+                parms["awaitPromise"] = true;
+
+            var result = await SendCommandAsync("Runtime.evaluate", parms);
+
+            var exceptionDetails = result["exceptionDetails"];
+            if (exceptionDetails != null)
+            {
+                var exText = exceptionDetails["exception"]?.Value<string>("description")
+                    ?? exceptionDetails.Value<string>("text")
+                    ?? "Unknown error";
+                return new JsEvalResult { IsError = true, Value = exText, Type = "error" };
+            }
+
+            var remoteObj = result["result"];
+            var type = remoteObj?.Value<string>("type") ?? "undefined";
+            var value = remoteObj?["value"];
+            var description = remoteObj?.Value<string>("description");
+
+            string valueStr;
+            if (type == "undefined")
+                valueStr = "undefined";
+            else if (value != null)
+                valueStr = value.ToString(Formatting.Indented);
+            else
+                valueStr = description ?? type;
+
+            return new JsEvalResult { IsError = false, Value = valueStr, Type = type };
+        }
+
+        public async Task<string> ClickElementAsync(string selector)
+        {
+            var escapedSelector = JsonConvert.SerializeObject(selector);
+            var evalResult = await EvaluateJsAsync(
+                $"(() => {{ var el = document.querySelector({escapedSelector}); if (!el) return 'not_found'; el.click(); return 'clicked'; }})()",
+                false);
+            return evalResult.Value;
+        }
+
+        public async Task<string> SetElementValueAsync(string selector, string value)
+        {
+            var escapedSelector = JsonConvert.SerializeObject(selector);
+            var escapedValue = JsonConvert.SerializeObject(value);
+
+            var js = $@"(() => {{
+                    var el = document.querySelector({escapedSelector});
+                    if (!el) return 'not_found';
+                    var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+                        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+                    if (nativeSetter && nativeSetter.set) {{
+                        nativeSetter.set.call(el, {escapedValue});
+                    }} else {{
+                        el.value = {escapedValue};
+                    }}
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return 'set';
+                }})()";
+
+            var evalResult = await EvaluateJsAsync(js, false);
+            return evalResult.Value;
+        }
+
+        #endregion
+
         #region Private
 
-        private async Task<string> TryGetWebSocketUrlAsync(int port)
+        private async Task<(string wsUrl, JObject versionInfo)> TryGetWebSocketUrlAsync(int port)
         {
             try
             {
@@ -213,13 +421,31 @@ namespace VsMcp.Extension.Services
                 {
                     var json = await reader.ReadToEndAsync();
                     var obj = JObject.Parse(json);
-                    return obj.Value<string>("webSocketDebuggerUrl");
+                    var wsUrl = obj.Value<string>("webSocketDebuggerUrl");
+                    return (wsUrl, obj);
                 }
             }
             catch
             {
-                return null;
+                return (null, null);
             }
+        }
+
+        private async Task<int> GetDocumentRootAsync()
+        {
+            var docResult = await SendCommandAsync("DOM.getDocument", new JObject { ["depth"] = 0 });
+            return docResult["root"]?.Value<int>("nodeId") ?? 0;
+        }
+
+        private async Task<int> QuerySelectorNodeAsync(string selector)
+        {
+            int rootId = await GetDocumentRootAsync();
+            var qResult = await SendCommandAsync("DOM.querySelector", new JObject
+            {
+                ["nodeId"] = rootId,
+                ["selector"] = selector
+            });
+            return qResult.Value<int>("nodeId");
         }
 
         private async Task ReceiveLoopAsync()

@@ -14,7 +14,7 @@ namespace VsMcp.Extension.Tools
 {
     public static class WebTools
     {
-        private static CdpConnection _cdp;
+        private static IBrowserConnection _connection;
         private static readonly object _lock = new object();
 
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
@@ -23,16 +23,17 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "web_connect",
-                    "Connect to a Chrome/Edge browser via Chrome DevTools Protocol (CDP). The browser must be started with --remote-debugging-port flag. Auto-detects on ports 9222-9229 if no port specified.",
+                    "Connect to a browser for web debugging. Supports Chrome/Edge (via CDP) and Firefox (via RDP). Auto-detects browser type by default.",
                     SchemaBuilder.Create()
-                        .AddInteger("port", "CDP debugging port (default: auto-detect 9222-9229)")
+                        .AddEnum("browser", "Browser type to connect to", new[] { "auto", "chrome", "firefox" })
+                        .AddInteger("port", "Debugging port (default: auto-detect)")
                         .Build()),
                 args => WebConnectAsync(args));
 
             registry.Register(
                 new McpToolDefinition(
                     "web_disconnect",
-                    "Disconnect from the browser CDP connection",
+                    "Disconnect from the browser connection",
                     SchemaBuilder.Empty()),
                 args => WebDisconnectAsync());
 
@@ -187,20 +188,20 @@ namespace VsMcp.Extension.Tools
         {
             lock (_lock)
             {
-                _cdp?.Dispose();
-                _cdp = null;
+                _connection?.Dispose();
+                _connection = null;
             }
         }
 
         #region Helpers
 
-        private static CdpConnection GetConnection()
+        private static IBrowserConnection GetConnection()
         {
             lock (_lock)
             {
-                if (_cdp == null || !_cdp.IsConnected)
+                if (_connection == null || !_connection.IsConnected)
                     return null;
-                return _cdp;
+                return _connection;
             }
         }
 
@@ -209,40 +210,17 @@ namespace VsMcp.Extension.Tools
             return McpToolResult.Error("Not connected to any browser. Use web_connect first.");
         }
 
-        private static McpToolResult HandleCdpException(Exception ex)
+        private static McpToolResult HandleBrowserException(Exception ex)
         {
             if (ex is CdpException cdpEx)
                 return McpToolResult.Error($"CDP error: {cdpEx.Message} (code: {cdpEx.Code})");
             if (ex is TimeoutException)
-                return McpToolResult.Error("CDP command timed out after 30 seconds.");
+                return McpToolResult.Error("Browser command timed out after 30 seconds.");
             if (ex is InvalidOperationException invEx && invEx.Message.Contains("Not connected"))
                 return NotConnectedError();
             if (ex.Message.Contains("connection lost") || ex.Message.Contains("Connection closed"))
                 return McpToolResult.Error("Browser connection lost. Use web_connect to reconnect.");
             return McpToolResult.Error($"Web tool error: {ex.Message}");
-        }
-
-        /// <summary>
-        /// Helper: get the document root node ID.
-        /// </summary>
-        private static async Task<int> GetDocumentRootAsync(CdpConnection cdp)
-        {
-            var docResult = await cdp.SendCommandAsync("DOM.getDocument", new JObject { ["depth"] = 0 });
-            return docResult["root"]?.Value<int>("nodeId") ?? 0;
-        }
-
-        /// <summary>
-        /// Helper: querySelector returning nodeId, 0 if not found.
-        /// </summary>
-        private static async Task<int> QuerySelectorAsync(CdpConnection cdp, string selector)
-        {
-            int rootId = await GetDocumentRootAsync(cdp);
-            var qResult = await cdp.SendCommandAsync("DOM.querySelector", new JObject
-            {
-                ["nodeId"] = rootId,
-                ["selector"] = selector
-            });
-            return qResult.Value<int>("nodeId");
         }
 
         #endregion
@@ -253,27 +231,73 @@ namespace VsMcp.Extension.Tools
         {
             try
             {
-                lock (_lock)
+                var browserParam = args.Value<string>("browser") ?? "auto";
+                int? port = args["port"]?.Value<int>();
+
+                IBrowserConnection conn = null;
+                Exception lastError = null;
+
+                // Try Chrome/Edge (CDP)
+                if (browserParam == "auto" || browserParam == "chrome")
                 {
-                    _cdp?.Dispose();
-                    _cdp = new CdpConnection();
+                    try
+                    {
+                        var cdp = new CdpConnection();
+                        await cdp.ConnectAsync(port);
+                        conn = cdp;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError = ex;
+                        if (browserParam == "chrome")
+                            throw;
+                    }
                 }
 
-                int? port = args["port"]?.Value<int>();
-                await _cdp.ConnectAsync(port);
+                // Try Firefox (RDP)
+                if (conn == null && (browserParam == "auto" || browserParam == "firefox"))
+                {
+                    try
+                    {
+                        var firefox = new FirefoxRdpConnection();
+                        await firefox.ConnectAsync(port);
+                        conn = firefox;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError = ex;
+                        if (browserParam == "firefox")
+                            throw;
+                    }
+                }
+
+                if (conn == null)
+                {
+                    var msg = browserParam == "auto"
+                        ? "No browser found. Chrome/Edge: start with --remote-debugging-port=9222 (scanned 9222-9229). Firefox: start with -start-debugger-server 6000 (scanned 6000-6009)."
+                        : lastError?.Message ?? "Failed to connect.";
+                    return McpToolResult.Error(msg);
+                }
+
+                lock (_lock)
+                {
+                    _connection?.Dispose();
+                    _connection = conn;
+                }
 
                 return McpToolResult.Success(new
                 {
                     status = "connected",
-                    browserUrl = _cdp.BrowserUrl
+                    browser = conn.BrowserType.ToString(),
+                    browserUrl = conn.BrowserUrl
                 });
             }
             catch (Exception ex)
             {
                 lock (_lock)
                 {
-                    _cdp?.Dispose();
-                    _cdp = null;
+                    _connection?.Dispose();
+                    _connection = null;
                 }
                 return McpToolResult.Error(ex.Message);
             }
@@ -281,25 +305,25 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebDisconnectAsync()
         {
-            CdpConnection cdp;
+            IBrowserConnection conn;
             lock (_lock)
             {
-                cdp = _cdp;
-                _cdp = null;
+                conn = _connection;
+                _connection = null;
             }
 
-            if (cdp == null)
+            if (conn == null)
                 return McpToolResult.Success("Not connected.");
 
-            await cdp.DisconnectAsync();
-            cdp.Dispose();
+            await conn.DisconnectAsync();
+            conn.Dispose();
             return McpToolResult.Success("Disconnected from browser.");
         }
 
         private static Task<McpToolResult> WebStatusAsync()
         {
-            var cdp = GetConnection();
-            if (cdp == null)
+            var conn = GetConnection();
+            if (conn == null)
             {
                 return Task.FromResult(McpToolResult.Success(new
                 {
@@ -314,11 +338,12 @@ namespace VsMcp.Extension.Tools
             return Task.FromResult(McpToolResult.Success(new
             {
                 connected = true,
-                browserUrl = cdp.BrowserUrl,
-                consoleEnabled = cdp.ConsoleEnabled,
-                networkEnabled = cdp.NetworkEnabled,
-                consoleMessages = cdp.ConsoleMessageCount,
-                networkEntries = cdp.NetworkEntryCount
+                browser = conn.BrowserType.ToString(),
+                browserUrl = conn.BrowserUrl,
+                consoleEnabled = conn.ConsoleEnabled,
+                networkEnabled = conn.NetworkEnabled,
+                consoleMessages = conn.ConsoleMessageCount,
+                networkEntries = conn.NetworkEntryCount
             }));
         }
 
@@ -328,8 +353,8 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebNavigateAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var url = args.Value<string>("url");
             if (string.IsNullOrEmpty(url))
@@ -339,35 +364,17 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                if (waitForLoad)
-                    await cdp.SendCommandAsync("Page.enable");
-
-                var navResult = await cdp.SendCommandAsync("Page.navigate", new JObject { ["url"] = url });
-
-                if (waitForLoad)
-                {
-                    try
-                    {
-                        await cdp.SendCommandAsync("Runtime.evaluate", new JObject
-                        {
-                            ["expression"] = "new Promise(r => { if (document.readyState === 'complete') r(); else window.addEventListener('load', r, {once:true}); })",
-                            ["awaitPromise"] = true
-                        });
-                    }
-                    catch { }
-                }
-
-                var frameId = navResult?.Value<string>("frameId") ?? "";
+                var result = await conn.NavigateAsync(url, waitForLoad);
                 return McpToolResult.Success(new
                 {
                     navigated = true,
-                    url,
-                    frameId
+                    url = result.Url,
+                    frameId = result.FrameId
                 });
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
@@ -377,32 +384,24 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebScreenshotAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             try
             {
                 var format = args.Value<string>("format") ?? "png";
-                var parms = new JObject { ["format"] = format };
+                var quality = args["quality"]?.Value<int>();
 
-                if (format == "jpeg")
-                {
-                    var quality = args["quality"]?.Value<int>() ?? 80;
-                    parms["quality"] = quality;
-                }
+                var result = await conn.CaptureScreenshotAsync(format, quality);
 
-                var result = await cdp.SendCommandAsync("Page.captureScreenshot", parms);
-                var data = result.Value<string>("data");
-
-                if (string.IsNullOrEmpty(data))
+                if (string.IsNullOrEmpty(result.Base64Data))
                     return McpToolResult.Error("Screenshot capture returned empty data.");
 
-                var mimeType = format == "jpeg" ? "image/jpeg" : "image/png";
-                return McpToolResult.Image(data, mimeType);
+                return McpToolResult.Image(result.Base64Data, result.MimeType);
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
@@ -412,26 +411,25 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebDomGetAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             try
             {
                 int depth = args["depth"]?.Value<int>() ?? 3;
-                var result = await cdp.SendCommandAsync("DOM.getDocument", new JObject { ["depth"] = depth });
-                var root = result["root"];
-                return McpToolResult.Success(root?.ToString(Formatting.Indented) ?? "{}");
+                var result = await conn.GetDocumentAsync(depth);
+                return McpToolResult.Success(result);
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static async Task<McpToolResult> WebDomQueryAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var selector = args.Value<string>("selector");
             if (string.IsNullOrEmpty(selector))
@@ -439,54 +437,29 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                int rootId = await GetDocumentRootAsync(cdp);
-                var result = await cdp.SendCommandAsync("DOM.querySelectorAll", new JObject
+                var nodes = await conn.QuerySelectorAllAsync(selector);
+                return McpToolResult.Success(new
                 {
-                    ["nodeId"] = rootId,
-                    ["selector"] = selector
+                    count = nodes.Count,
+                    nodes = nodes.Select(n => new
+                    {
+                        nodeId = n.NodeId,
+                        nodeName = n.NodeName,
+                        nodeType = n.NodeType,
+                        attributes = n.Attributes
+                    }).ToArray()
                 });
-
-                var nodeIds = result["nodeIds"] as JArray ?? new JArray();
-                var nodes = new List<object>();
-
-                foreach (var nodeIdToken in nodeIds)
-                {
-                    int nodeId = nodeIdToken.Value<int>();
-                    if (nodeId == 0) continue;
-
-                    try
-                    {
-                        var desc = await cdp.SendCommandAsync("DOM.describeNode", new JObject
-                        {
-                            ["nodeId"] = nodeId
-                        });
-                        var node = desc["node"];
-                        nodes.Add(new
-                        {
-                            nodeId,
-                            nodeName = node?.Value<string>("nodeName"),
-                            nodeType = node?.Value<int>("nodeType"),
-                            attributes = node?["attributes"]
-                        });
-                    }
-                    catch
-                    {
-                        nodes.Add(new { nodeId });
-                    }
-                }
-
-                return McpToolResult.Success(new { count = nodes.Count, nodes });
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static async Task<McpToolResult> WebDomGetHtmlAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var selector = args.Value<string>("selector");
             if (string.IsNullOrEmpty(selector))
@@ -494,27 +467,21 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                int nodeId = await QuerySelectorAsync(cdp, selector);
-                if (nodeId == 0)
+                var html = await conn.GetOuterHtmlAsync(selector);
+                if (html == null)
                     return McpToolResult.Error($"No element found for selector: {selector}");
-
-                var result = await cdp.SendCommandAsync("DOM.getOuterHTML", new JObject
-                {
-                    ["nodeId"] = nodeId
-                });
-
-                return McpToolResult.Success(result.Value<string>("outerHTML") ?? "");
+                return McpToolResult.Success(html);
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static async Task<McpToolResult> WebDomGetAttributesAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var selector = args.Value<string>("selector");
             if (string.IsNullOrEmpty(selector))
@@ -522,27 +489,14 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                int nodeId = await QuerySelectorAsync(cdp, selector);
-                if (nodeId == 0)
+                var attrs = await conn.GetAttributesAsync(selector);
+                if (attrs == null)
                     return McpToolResult.Error($"No element found for selector: {selector}");
-
-                var result = await cdp.SendCommandAsync("DOM.getAttributes", new JObject
-                {
-                    ["nodeId"] = nodeId
-                });
-
-                var attrs = result["attributes"] as JArray ?? new JArray();
-                var dict = new Dictionary<string, string>();
-                for (int i = 0; i < attrs.Count - 1; i += 2)
-                {
-                    dict[attrs[i].Value<string>()] = attrs[i + 1].Value<string>();
-                }
-
-                return McpToolResult.Success(new { selector, attributes = dict });
+                return McpToolResult.Success(new { selector, attributes = attrs });
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
@@ -552,28 +506,27 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebConsoleEnableAsync()
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             try
             {
-                await cdp.SendCommandAsync("Runtime.enable");
-                cdp.EnableConsole();
+                await conn.EnableConsoleAsync();
                 return McpToolResult.Success("Console monitoring enabled. Messages will be collected.");
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static Task<McpToolResult> WebConsoleGetAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return Task.FromResult(NotConnectedError());
+            var conn = GetConnection();
+            if (conn == null) return Task.FromResult(NotConnectedError());
 
             var level = args.Value<string>("level");
-            var messages = cdp.GetConsoleMessages(level);
+            var messages = conn.GetConsoleMessages(level);
 
             return Task.FromResult(McpToolResult.Success(new
             {
@@ -589,10 +542,10 @@ namespace VsMcp.Extension.Tools
 
         private static Task<McpToolResult> WebConsoleClearAsync()
         {
-            var cdp = GetConnection();
-            if (cdp == null) return Task.FromResult(NotConnectedError());
+            var conn = GetConnection();
+            if (conn == null) return Task.FromResult(NotConnectedError());
 
-            cdp.ClearConsoleMessages();
+            conn.ClearConsoleMessages();
             return Task.FromResult(McpToolResult.Success("Console buffer cleared."));
         }
 
@@ -602,8 +555,8 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebJsExecuteAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var expression = args.Value<string>("expression");
             if (string.IsNullOrEmpty(expression))
@@ -613,41 +566,14 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                var parms = new JObject
-                {
-                    ["expression"] = expression,
-                    ["returnByValue"] = true
-                };
-                if (awaitPromise)
-                    parms["awaitPromise"] = true;
-
-                var result = await cdp.SendCommandAsync("Runtime.evaluate", parms);
-
-                var exceptionDetails = result["exceptionDetails"];
-                if (exceptionDetails != null)
-                {
-                    var exText = exceptionDetails["exception"]?.Value<string>("description")
-                        ?? exceptionDetails.Value<string>("text")
-                        ?? "Unknown error";
-                    return McpToolResult.Error($"JavaScript error: {exText}");
-                }
-
-                var remoteObj = result["result"];
-                var type = remoteObj?.Value<string>("type") ?? "undefined";
-                var value = remoteObj?["value"];
-                var description = remoteObj?.Value<string>("description");
-
-                if (type == "undefined")
-                    return McpToolResult.Success("undefined");
-
-                if (value != null)
-                    return McpToolResult.Success(value.ToString(Formatting.Indented));
-
-                return McpToolResult.Success(description ?? type);
+                var result = await conn.EvaluateJsAsync(expression, awaitPromise);
+                if (result.IsError)
+                    return McpToolResult.Error($"JavaScript error: {result.Value}");
+                return McpToolResult.Success(result.Value);
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
@@ -657,29 +583,28 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebNetworkEnableAsync()
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             try
             {
-                await cdp.SendCommandAsync("Network.enable");
-                cdp.EnableNetwork();
+                await conn.EnableNetworkAsync();
                 return McpToolResult.Success("Network monitoring enabled. Requests will be captured.");
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static Task<McpToolResult> WebNetworkGetAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return Task.FromResult(NotConnectedError());
+            var conn = GetConnection();
+            if (conn == null) return Task.FromResult(NotConnectedError());
 
             var urlFilter = args.Value<string>("urlFilter");
             var methodFilter = args.Value<string>("methodFilter");
-            var entries = cdp.GetNetworkEntries(urlFilter, methodFilter);
+            var entries = conn.GetNetworkEntries(urlFilter, methodFilter);
 
             return Task.FromResult(McpToolResult.Success(new
             {
@@ -702,10 +627,10 @@ namespace VsMcp.Extension.Tools
 
         private static Task<McpToolResult> WebNetworkClearAsync()
         {
-            var cdp = GetConnection();
-            if (cdp == null) return Task.FromResult(NotConnectedError());
+            var conn = GetConnection();
+            if (conn == null) return Task.FromResult(NotConnectedError());
 
-            cdp.ClearNetworkEntries();
+            conn.ClearNetworkEntries();
             return Task.FromResult(McpToolResult.Success("Network buffer cleared."));
         }
 
@@ -715,8 +640,8 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> WebElementClickAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var selector = args.Value<string>("selector");
             if (string.IsNullOrEmpty(selector))
@@ -724,29 +649,21 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                var escapedSelector = JsonConvert.SerializeObject(selector);
-                var result = await cdp.SendCommandAsync("Runtime.evaluate", new JObject
-                {
-                    ["expression"] = $"(() => {{ var el = document.querySelector({escapedSelector}); if (!el) return 'not_found'; el.click(); return 'clicked'; }})()",
-                    ["returnByValue"] = true
-                });
-
-                var value = result["result"]?.Value<string>("value");
-                if (value == "not_found")
+                var result = await conn.ClickElementAsync(selector);
+                if (result == "not_found")
                     return McpToolResult.Error($"No element found for selector: {selector}");
-
                 return McpToolResult.Success($"Clicked element: {selector}");
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
         private static async Task<McpToolResult> WebElementSetValueAsync(JObject args)
         {
-            var cdp = GetConnection();
-            if (cdp == null) return NotConnectedError();
+            var conn = GetConnection();
+            if (conn == null) return NotConnectedError();
 
             var selector = args.Value<string>("selector");
             if (string.IsNullOrEmpty(selector))
@@ -758,40 +675,14 @@ namespace VsMcp.Extension.Tools
 
             try
             {
-                var escapedSelector = JsonConvert.SerializeObject(selector);
-                var escapedValue = JsonConvert.SerializeObject(value);
-
-                // Use native input value setter for React compatibility
-                var js = $@"(() => {{
-                    var el = document.querySelector({escapedSelector});
-                    if (!el) return 'not_found';
-                    var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
-                        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-                    if (nativeSetter && nativeSetter.set) {{
-                        nativeSetter.set.call(el, {escapedValue});
-                    }} else {{
-                        el.value = {escapedValue};
-                    }}
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return 'set';
-                }})()";
-
-                var result = await cdp.SendCommandAsync("Runtime.evaluate", new JObject
-                {
-                    ["expression"] = js,
-                    ["returnByValue"] = true
-                });
-
-                var resultValue = result["result"]?.Value<string>("value");
-                if (resultValue == "not_found")
+                var result = await conn.SetElementValueAsync(selector, value);
+                if (result == "not_found")
                     return McpToolResult.Error($"No element found for selector: {selector}");
-
                 return McpToolResult.Success($"Value set on element: {selector}");
             }
             catch (Exception ex)
             {
-                return HandleCdpException(ex);
+                return HandleBrowserException(ex);
             }
         }
 
