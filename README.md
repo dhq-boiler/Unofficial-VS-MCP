@@ -8,7 +8,7 @@
 
 ## Features
 
-VS MCP Server exposes **81 tools** across the following categories:
+VS MCP Server exposes **99 tools** across the following categories:
 
 | Category | Tools | Description |
 |----------|------:|-------------|
@@ -21,6 +21,7 @@ VS MCP Server exposes **81 tools** across the following categories:
 | Output & Diagnostics | 4 | Read/write output panes, error list, XAML binding errors |
 | Console | 4 | Read console output, send input/keys, get console info for debugged apps |
 | UI Automation | 10 | Capture screenshots, inspect UI trees, find/click/right-click/drag/invoke elements |
+| Web | 18 | Browser automation via Chrome CDP and Firefox RDP — navigation, DOM, console, network, screenshots |
 | Advanced Debug | 22 | Watch, thread/process management, immediate window, registers, memory, parallel stacks |
 
 ### Tool Details
@@ -200,6 +201,29 @@ VS MCP Server exposes **81 tools** across the following categories:
 | `parallel_stacks` | Get all threads' call stacks in a tree view, grouping threads that share common stack frames |
 | `parallel_watch` | Evaluate the same expression on all threads and compare results |
 | `parallel_tasks_list` | List TPL (Task Parallel Library) task information |
+
+#### Web
+
+| Tool | Description |
+|------|-------------|
+| `web_connect` | Connect to a browser for web debugging (Chrome/Edge via CDP, Firefox via RDP) |
+| `web_disconnect` | Disconnect from the browser connection |
+| `web_status` | Get the current browser connection status including console/network message counts |
+| `web_navigate` | Navigate the browser to a URL |
+| `web_screenshot` | Capture a screenshot of the current page |
+| `web_dom_get` | Get the DOM tree of the current page with configurable depth |
+| `web_dom_query` | Query DOM elements using a CSS selector |
+| `web_dom_get_html` | Get the outerHTML of a DOM element found by CSS selector |
+| `web_dom_get_attributes` | Get all attributes of a DOM element found by CSS selector |
+| `web_console_enable` | Start collecting browser console messages |
+| `web_console_get` | Get collected browser console messages |
+| `web_console_clear` | Clear the collected console message buffer |
+| `web_js_execute` | Execute JavaScript in the browser page context |
+| `web_network_enable` | Start monitoring network requests and responses |
+| `web_network_get` | Get captured network requests/responses |
+| `web_network_clear` | Clear the captured network entry buffer |
+| `web_element_click` | Click a DOM element found by CSS selector |
+| `web_element_set_value` | Set the value of an input element found by CSS selector |
 
 ## Requirements
 

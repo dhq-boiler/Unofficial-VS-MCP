@@ -34,7 +34,7 @@ namespace VsMcp.Shared.Protocol
                 + "Do NOT use curl to check status — use get_status. "
                 + "Do NOT read output panes manually — use output_read. "
                 + "Call get_help for a full categorized tool list. "
-                + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Watch, Thread, Process, Immediate, Module, Register, Exception, Memory, Parallel, Diagnostics, Output, UI Automation. "
+                + "Categories: General, Solution, Project, Build, Editor, Debugger, Breakpoint, Watch, Thread, Process, Immediate, Module, Register, Exception, Memory, Parallel, Diagnostics, Output, Console, Web, UI Automation. "
                 + "FIRST STEP: Always call get_status FIRST to check which solution is currently open and the debugger state before performing any operations. "
                 + "WRONG SOLUTION: If get_status shows a different solution than expected, ask the user how to proceed — do NOT silently open another solution or launch a new VS instance. "
                 + "Options: close the current solution (solution_close then solution_open), or use 'dotnet build' CLI as a fallback. "
@@ -54,7 +54,13 @@ namespace VsMcp.Shared.Protocol
                 + "Alternatively, adjust the right-click position so submenus stay within the window. "
                 + "DRAG AND HIT-TESTING: ui_drag sends Win32 mouse events, so WPF visual hit-testing applies. "
                 + "If a visual element (e.g. Polyline, Border) overlaps the drag start position, the event goes to that element instead of the intended target. "
-                + "When drag does not work as expected, use ui_get_tree or ui_find_elements to check what element is at the start position.";
+                + "When drag does not work as expected, use ui_get_tree or ui_find_elements to check what element is at the start position. "
+                + "WEB DEBUGGING: Use web_connect to connect to Chrome/Edge (via CDP) or Firefox (via RDP). "
+                + "Chrome/Edge: start with --remote-debugging-port (e.g. chrome --remote-debugging-port=9222). Auto-detection scans ports 9222-9229. "
+                + "Firefox: start with -start-debugger-server (e.g. firefox -start-debugger-server 6000). Requires devtools.debugger.remote-enabled=true in about:config. Auto-detection scans ports 6000-6009. "
+                + "Use web_connect with browser='auto' (default) to auto-detect, or browser='chrome'/'firefox' to specify. "
+                + "Call web_console_enable / web_network_enable to start monitoring before navigating. "
+                + "Use web_js_execute for JavaScript evaluation, web_dom_query for CSS selectors, web_screenshot for page captures.";
         }
     }
 }
