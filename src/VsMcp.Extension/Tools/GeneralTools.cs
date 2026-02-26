@@ -148,6 +148,13 @@ namespace VsMcp.Extension.Tools
             { "code_goto_definition", "Navigation" },
             { "code_find_references", "Navigation" },
             { "code_goto_implementation", "Navigation" },
+            // SolutionExplorer
+            { "solution_add_project", "SolutionExplorer" },
+            { "solution_remove_project", "SolutionExplorer" },
+            { "project_add_file", "SolutionExplorer" },
+            { "project_remove_file", "SolutionExplorer" },
+            { "project_add_reference", "SolutionExplorer" },
+            { "project_remove_reference", "SolutionExplorer" },
         };
 
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
@@ -195,7 +202,7 @@ namespace VsMcp.Extension.Tools
                 });
             }
 
-            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "Web", "UI", "Test", "NuGet", "Navigation", "Other" };
+            var categoryOrder = new[] { "General", "Solution", "Project", "Build", "Editor", "Debugger", "Breakpoint", "Watch", "Thread", "Process", "Immediate", "Module", "Register", "Exception", "Memory", "Parallel", "Diagnostics", "Output", "Console", "Web", "UI", "Test", "NuGet", "Navigation", "SolutionExplorer", "Other" };
             var ordered = new List<object>();
             foreach (var cat in categoryOrder)
             {
