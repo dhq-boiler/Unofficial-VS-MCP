@@ -359,6 +359,36 @@ claude mcp add vs-mcp -- "C:\Users\<USERNAME>\AppData\Local\VsMcp\bin\VsMcp.Stdi
 }
 ```
 
+### Tool Filtering
+
+Use the `--tools` argument to load only the tool categories you need. This reduces the number of tools exposed to the AI agent, which can improve token efficiency and response relevance.
+
+| Preset | Categories |
+|--------|------------|
+| `core` | General, Solution, Project, Build, Editor, EditPreview, Output, Navigation, NuGet, SolutionExplorer, Test |
+| `debug` | Debugger, Breakpoint, Watch, Thread, Process, Immediate, Module, Register, Exception, Memory, Parallel, Diagnostics, Console |
+| `web` | Web |
+| `ui` | UI |
+
+**Examples:**
+
+```
+claude mcp add vs-mcp -- "C:\Users\<USERNAME>\AppData\Local\VsMcp\bin\VsMcp.StdioProxy.exe" --tools core,debug
+```
+
+```json
+{
+  "mcpServers": {
+    "vs-mcp": {
+      "command": "C:\\Users\\<USERNAME>\\AppData\\Local\\VsMcp\\bin\\VsMcp.StdioProxy.exe",
+      "args": ["--tools", "core,debug"]
+    }
+  }
+}
+```
+
+You can also specify individual category names (e.g. `--tools General,Build,Debugger`). Omitting `--tools` loads all tools.
+
 ### Reconnection
 
 - If VS is restarted, StdioProxy automatically reconnects on the next `tools/call` request.
