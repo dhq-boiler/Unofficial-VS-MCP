@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.1] - 2026-02-26
+
+### Added
+- **Test runner tools** (3 new tools) — `test_discover`, `test_run`, `test_results`
+- **NuGet package management tools** (5 new tools) — `nuget_list`, `nuget_search`, `nuget_install`, `nuget_update`, `nuget_uninstall`
+- **Code navigation tools** (3 new tools) — `code_goto_definition`, `code_find_references`, `code_goto_implementation`
+- **Solution Explorer tools** (6 new tools) — `solution_add_project`, `solution_remove_project`, `project_add_file`, `project_remove_file`, `project_add_reference`, `project_remove_reference`
+- **Edit preview and approval tools** (4 new tools) — `edit_preview` shows a diff in VS, `edit_approve`/`edit_reject` to accept or discard changes, `edit_list_pending` to list pending edits
+- **`--tools` argument** for dynamic tool loading — filter tools by category presets (`core`, `debug`, `web`, `ui`) or individual category names to reduce token usage
+
+### Changed
+- **Consolidated similar tools** from ~120 to 106 for improved usability
+  - `breakpoint_set` now handles regular, conditional, hit count, and function breakpoints
+  - `debug_step` replaces `debug_step_over`/`debug_step_into`/`debug_step_out` with a `direction` parameter
+  - `console_send` replaces `console_send_input`/`console_send_keys`
+  - `thread_set_frozen` replaces `thread_freeze`/`thread_thaw`
+  - `memory_read` replaces `memory_read`/`memory_read_variable`
+  - `web_console` replaces `web_console_enable`/`web_console_get`/`web_console_clear`
+  - `web_network` replaces `web_network_enable`/`web_network_get`/`web_network_clear`
+  - `web_dom_query` absorbs `web_dom_get_html`/`web_dom_get_attributes`
+- **Compressed MCP instructions** from ~3600 chars to ~600 chars for reduced token usage
+
 ## [0.3.0] - 2026-02-26
 
 ### Added
