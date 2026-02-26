@@ -24,21 +24,13 @@ namespace VsMcp.Extension.Tools
 
             registry.Register(
                 new McpToolDefinition(
-                    "thread_freeze",
-                    "Freeze a thread so it does not execute when the debugger continues",
+                    "thread_set_frozen",
+                    "Freeze or thaw a thread. frozen=true freezes the thread, frozen=false thaws it.",
                     SchemaBuilder.Create()
-                        .AddInteger("threadId", "The ID of the thread to freeze", required: true)
+                        .AddInteger("threadId", "The ID of the thread", required: true)
+                        .AddBoolean("frozen", "true to freeze, false to thaw", required: true)
                         .Build()),
-                args => ThreadFreezeAsync(accessor, args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "thread_thaw",
-                    "Thaw (unfreeze) a frozen thread so it resumes execution",
-                    SchemaBuilder.Create()
-                        .AddInteger("threadId", "The ID of the thread to thaw", required: true)
-                        .Build()),
-                args => ThreadThawAsync(accessor, args));
+                args => ThreadSetFrozenAsync(accessor, args));
 
             registry.Register(
                 new McpToolDefinition(
@@ -92,11 +84,15 @@ namespace VsMcp.Extension.Tools
             });
         }
 
-        private static async Task<McpToolResult> ThreadFreezeAsync(VsServiceAccessor accessor, JObject args)
+        private static async Task<McpToolResult> ThreadSetFrozenAsync(VsServiceAccessor accessor, JObject args)
         {
             var threadId = args.Value<int?>("threadId");
             if (!threadId.HasValue)
                 return McpToolResult.Error("Parameter 'threadId' is required");
+
+            var frozen = args.Value<bool?>("frozen");
+            if (!frozen.HasValue)
+                return McpToolResult.Error("Parameter 'frozen' is required");
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
@@ -104,37 +100,18 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
-                    return McpToolResult.Error("Debugger must be in Break mode to freeze threads");
+                    return McpToolResult.Error("Debugger must be in Break mode to freeze/thaw threads");
 
                 var thread = FindThread(dte.Debugger, threadId.Value);
                 if (thread == null)
                     return McpToolResult.Error($"Thread with ID {threadId.Value} not found");
 
-                thread.Freeze();
-                return McpToolResult.Success($"Thread {threadId.Value} frozen");
-            });
-        }
+                if (frozen.Value)
+                    thread.Freeze();
+                else
+                    thread.Thaw();
 
-        private static async Task<McpToolResult> ThreadThawAsync(VsServiceAccessor accessor, JObject args)
-        {
-            var threadId = args.Value<int?>("threadId");
-            if (!threadId.HasValue)
-                return McpToolResult.Error("Parameter 'threadId' is required");
-
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                    .Run(() => accessor.GetDteAsync());
-
-                if (dte.Debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
-                    return McpToolResult.Error("Debugger must be in Break mode to thaw threads");
-
-                var thread = FindThread(dte.Debugger, threadId.Value);
-                if (thread == null)
-                    return McpToolResult.Error($"Thread with ID {threadId.Value} not found");
-
-                thread.Thaw();
-                return McpToolResult.Success($"Thread {threadId.Value} thawed");
+                return McpToolResult.Success($"Thread {threadId.Value} {(frozen.Value ? "frozen" : "thawed")}");
             });
         }
 

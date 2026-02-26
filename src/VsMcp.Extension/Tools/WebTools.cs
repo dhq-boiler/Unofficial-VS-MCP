@@ -79,53 +79,23 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "web_dom_query",
-                    "Query DOM elements using a CSS selector. Returns matching node IDs and basic info.",
+                    "Query DOM elements using a CSS selector. returnType: nodes (default, returns node IDs/info), html (returns outerHTML), attributes (returns all attributes)",
                     SchemaBuilder.Create()
                         .AddString("selector", "CSS selector to query", required: true)
+                        .AddEnum("returnType", "What to return for matching elements", new[] { "nodes", "html", "attributes" })
                         .Build()),
-                args => WebDomQueryAsync(args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_dom_get_html",
-                    "Get the outerHTML of a DOM element found by CSS selector",
-                    SchemaBuilder.Create()
-                        .AddString("selector", "CSS selector to find the element", required: true)
-                        .Build()),
-                args => WebDomGetHtmlAsync(args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_dom_get_attributes",
-                    "Get all attributes of a DOM element found by CSS selector",
-                    SchemaBuilder.Create()
-                        .AddString("selector", "CSS selector to find the element", required: true)
-                        .Build()),
-                args => WebDomGetAttributesAsync(args));
+                args => WebDomQueryUnifiedAsync(args));
 
             // Console
             registry.Register(
                 new McpToolDefinition(
-                    "web_console_enable",
-                    "Start collecting browser console messages (console.log, console.error, etc.)",
-                    SchemaBuilder.Empty()),
-                args => WebConsoleEnableAsync());
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_console_get",
-                    "Get collected browser console messages. Use web_console_enable first.",
+                    "web_console",
+                    "Manage browser console messages. action: enable (start collecting), get (retrieve messages), clear (clear buffer)",
                     SchemaBuilder.Create()
-                        .AddString("level", "Filter by level: log, warn, error, info, debug")
+                        .AddEnum("action", "Operation to perform", new[] { "enable", "get", "clear" }, required: true)
+                        .AddString("level", "Filter by level when action=get: log, warn, error, info, debug")
                         .Build()),
-                args => WebConsoleGetAsync(args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_console_clear",
-                    "Clear the collected console message buffer",
-                    SchemaBuilder.Empty()),
-                args => WebConsoleClearAsync());
+                args => WebConsoleAsync(args));
 
             // JavaScript
             registry.Register(
@@ -141,27 +111,14 @@ namespace VsMcp.Extension.Tools
             // Network
             registry.Register(
                 new McpToolDefinition(
-                    "web_network_enable",
-                    "Start monitoring network requests and responses",
-                    SchemaBuilder.Empty()),
-                args => WebNetworkEnableAsync());
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_network_get",
-                    "Get captured network requests/responses. Use web_network_enable first.",
+                    "web_network",
+                    "Manage network monitoring. action: enable (start capturing), get (retrieve entries), clear (clear buffer)",
                     SchemaBuilder.Create()
-                        .AddString("urlFilter", "Filter entries by URL substring (case-insensitive)")
-                        .AddString("methodFilter", "Filter entries by HTTP method (GET, POST, etc.)")
+                        .AddEnum("action", "Operation to perform", new[] { "enable", "get", "clear" }, required: true)
+                        .AddString("urlFilter", "Filter entries by URL substring when action=get (case-insensitive)")
+                        .AddString("methodFilter", "Filter entries by HTTP method when action=get (GET, POST, etc.)")
                         .Build()),
-                args => WebNetworkGetAsync(args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "web_network_clear",
-                    "Clear the captured network entry buffer",
-                    SchemaBuilder.Empty()),
-                args => WebNetworkClearAsync());
+                args => WebNetworkAsync(args));
 
             // Element interaction
             registry.Register(
@@ -426,7 +383,7 @@ namespace VsMcp.Extension.Tools
             }
         }
 
-        private static async Task<McpToolResult> WebDomQueryAsync(JObject args)
+        private static async Task<McpToolResult> WebDomQueryUnifiedAsync(JObject args)
         {
             var conn = GetConnection();
             if (conn == null) return NotConnectedError();
@@ -435,64 +392,42 @@ namespace VsMcp.Extension.Tools
             if (string.IsNullOrEmpty(selector))
                 return McpToolResult.Error("Parameter 'selector' is required.");
 
+            var returnType = args.Value<string>("returnType") ?? "nodes";
+
             try
             {
-                var nodes = await conn.QuerySelectorAllAsync(selector);
-                return McpToolResult.Success(new
+                switch (returnType)
                 {
-                    count = nodes.Count,
-                    nodes = nodes.Select(n => new
+                    case "html":
                     {
-                        nodeId = n.NodeId,
-                        nodeName = n.NodeName,
-                        nodeType = n.NodeType,
-                        attributes = n.Attributes
-                    }).ToArray()
-                });
-            }
-            catch (Exception ex)
-            {
-                return HandleBrowserException(ex);
-            }
-        }
-
-        private static async Task<McpToolResult> WebDomGetHtmlAsync(JObject args)
-        {
-            var conn = GetConnection();
-            if (conn == null) return NotConnectedError();
-
-            var selector = args.Value<string>("selector");
-            if (string.IsNullOrEmpty(selector))
-                return McpToolResult.Error("Parameter 'selector' is required.");
-
-            try
-            {
-                var html = await conn.GetOuterHtmlAsync(selector);
-                if (html == null)
-                    return McpToolResult.Error($"No element found for selector: {selector}");
-                return McpToolResult.Success(html);
-            }
-            catch (Exception ex)
-            {
-                return HandleBrowserException(ex);
-            }
-        }
-
-        private static async Task<McpToolResult> WebDomGetAttributesAsync(JObject args)
-        {
-            var conn = GetConnection();
-            if (conn == null) return NotConnectedError();
-
-            var selector = args.Value<string>("selector");
-            if (string.IsNullOrEmpty(selector))
-                return McpToolResult.Error("Parameter 'selector' is required.");
-
-            try
-            {
-                var attrs = await conn.GetAttributesAsync(selector);
-                if (attrs == null)
-                    return McpToolResult.Error($"No element found for selector: {selector}");
-                return McpToolResult.Success(new { selector, attributes = attrs });
+                        var html = await conn.GetOuterHtmlAsync(selector);
+                        if (html == null)
+                            return McpToolResult.Error($"No element found for selector: {selector}");
+                        return McpToolResult.Success(html);
+                    }
+                    case "attributes":
+                    {
+                        var attrs = await conn.GetAttributesAsync(selector);
+                        if (attrs == null)
+                            return McpToolResult.Error($"No element found for selector: {selector}");
+                        return McpToolResult.Success(new { selector, attributes = attrs });
+                    }
+                    default: // "nodes"
+                    {
+                        var nodes = await conn.QuerySelectorAllAsync(selector);
+                        return McpToolResult.Success(new
+                        {
+                            count = nodes.Count,
+                            nodes = nodes.Select(n => new
+                            {
+                                nodeId = n.NodeId,
+                                nodeName = n.NodeName,
+                                nodeType = n.NodeType,
+                                attributes = n.Attributes
+                            }).ToArray()
+                        });
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -504,49 +439,47 @@ namespace VsMcp.Extension.Tools
 
         #region Console tools
 
-        private static async Task<McpToolResult> WebConsoleEnableAsync()
+        private static async Task<McpToolResult> WebConsoleAsync(JObject args)
         {
             var conn = GetConnection();
             if (conn == null) return NotConnectedError();
 
-            try
+            var action = args.Value<string>("action");
+
+            switch (action)
             {
-                await conn.EnableConsoleAsync();
-                return McpToolResult.Success("Console monitoring enabled. Messages will be collected.");
+                case "enable":
+                    try
+                    {
+                        await conn.EnableConsoleAsync();
+                        return McpToolResult.Success("Console monitoring enabled. Messages will be collected.");
+                    }
+                    catch (Exception ex)
+                    {
+                        return HandleBrowserException(ex);
+                    }
+
+                case "get":
+                    var level = args.Value<string>("level");
+                    var messages = conn.GetConsoleMessages(level);
+                    return McpToolResult.Success(new
+                    {
+                        count = messages.Count,
+                        messages = messages.Select(m => new
+                        {
+                            level = m.Level,
+                            text = m.Text,
+                            timestamp = m.Timestamp
+                        }).ToArray()
+                    });
+
+                case "clear":
+                    conn.ClearConsoleMessages();
+                    return McpToolResult.Success("Console buffer cleared.");
+
+                default:
+                    return McpToolResult.Error($"Unknown action: '{action}'. Use 'enable', 'get', or 'clear'.");
             }
-            catch (Exception ex)
-            {
-                return HandleBrowserException(ex);
-            }
-        }
-
-        private static Task<McpToolResult> WebConsoleGetAsync(JObject args)
-        {
-            var conn = GetConnection();
-            if (conn == null) return Task.FromResult(NotConnectedError());
-
-            var level = args.Value<string>("level");
-            var messages = conn.GetConsoleMessages(level);
-
-            return Task.FromResult(McpToolResult.Success(new
-            {
-                count = messages.Count,
-                messages = messages.Select(m => new
-                {
-                    level = m.Level,
-                    text = m.Text,
-                    timestamp = m.Timestamp
-                }).ToArray()
-            }));
-        }
-
-        private static Task<McpToolResult> WebConsoleClearAsync()
-        {
-            var conn = GetConnection();
-            if (conn == null) return Task.FromResult(NotConnectedError());
-
-            conn.ClearConsoleMessages();
-            return Task.FromResult(McpToolResult.Success("Console buffer cleared."));
         }
 
         #endregion
@@ -581,57 +514,55 @@ namespace VsMcp.Extension.Tools
 
         #region Network tools
 
-        private static async Task<McpToolResult> WebNetworkEnableAsync()
+        private static async Task<McpToolResult> WebNetworkAsync(JObject args)
         {
             var conn = GetConnection();
             if (conn == null) return NotConnectedError();
 
-            try
+            var action = args.Value<string>("action");
+
+            switch (action)
             {
-                await conn.EnableNetworkAsync();
-                return McpToolResult.Success("Network monitoring enabled. Requests will be captured.");
+                case "enable":
+                    try
+                    {
+                        await conn.EnableNetworkAsync();
+                        return McpToolResult.Success("Network monitoring enabled. Requests will be captured.");
+                    }
+                    catch (Exception ex)
+                    {
+                        return HandleBrowserException(ex);
+                    }
+
+                case "get":
+                    var urlFilter = args.Value<string>("urlFilter");
+                    var methodFilter = args.Value<string>("methodFilter");
+                    var entries = conn.GetNetworkEntries(urlFilter, methodFilter);
+                    return McpToolResult.Success(new
+                    {
+                        count = entries.Count,
+                        entries = entries.Select(e => new
+                        {
+                            requestId = e.RequestId,
+                            url = e.Url,
+                            method = e.Method,
+                            statusCode = e.StatusCode,
+                            mimeType = e.MimeType,
+                            postData = e.PostData,
+                            error = e.Error,
+                            timestamp = e.Timestamp,
+                            requestHeaders = e.RequestHeaders,
+                            responseHeaders = e.ResponseHeaders
+                        }).ToArray()
+                    });
+
+                case "clear":
+                    conn.ClearNetworkEntries();
+                    return McpToolResult.Success("Network buffer cleared.");
+
+                default:
+                    return McpToolResult.Error($"Unknown action: '{action}'. Use 'enable', 'get', or 'clear'.");
             }
-            catch (Exception ex)
-            {
-                return HandleBrowserException(ex);
-            }
-        }
-
-        private static Task<McpToolResult> WebNetworkGetAsync(JObject args)
-        {
-            var conn = GetConnection();
-            if (conn == null) return Task.FromResult(NotConnectedError());
-
-            var urlFilter = args.Value<string>("urlFilter");
-            var methodFilter = args.Value<string>("methodFilter");
-            var entries = conn.GetNetworkEntries(urlFilter, methodFilter);
-
-            return Task.FromResult(McpToolResult.Success(new
-            {
-                count = entries.Count,
-                entries = entries.Select(e => new
-                {
-                    requestId = e.RequestId,
-                    url = e.Url,
-                    method = e.Method,
-                    statusCode = e.StatusCode,
-                    mimeType = e.MimeType,
-                    postData = e.PostData,
-                    error = e.Error,
-                    timestamp = e.Timestamp,
-                    requestHeaders = e.RequestHeaders,
-                    responseHeaders = e.ResponseHeaders
-                }).ToArray()
-            }));
-        }
-
-        private static Task<McpToolResult> WebNetworkClearAsync()
-        {
-            var conn = GetConnection();
-            if (conn == null) return Task.FromResult(NotConnectedError());
-
-            conn.ClearNetworkEntries();
-            return Task.FromResult(McpToolResult.Success("Network buffer cleared."));
         }
 
         #endregion

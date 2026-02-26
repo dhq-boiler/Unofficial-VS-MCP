@@ -48,9 +48,7 @@ namespace VsMcp.Extension.Tools
             { "debug_attach", "Debugger" },
             { "debug_break", "Debugger" },
             { "debug_continue", "Debugger" },
-            { "debug_step_over", "Debugger" },
-            { "debug_step_into", "Debugger" },
-            { "debug_step_out", "Debugger" },
+            { "debug_step", "Debugger" },
             { "debug_get_callstack", "Debugger" },
             { "debug_get_locals", "Debugger" },
             { "debug_get_threads", "Debugger" },
@@ -58,20 +56,16 @@ namespace VsMcp.Extension.Tools
             { "debug_evaluate", "Debugger" },
             // Breakpoint
             { "breakpoint_set", "Breakpoint" },
-            { "breakpoint_set_conditional", "Breakpoint" },
             { "breakpoint_remove", "Breakpoint" },
             { "breakpoint_list", "Breakpoint" },
             { "breakpoint_enable", "Breakpoint" },
-            { "breakpoint_set_hitcount", "Breakpoint" },
-            { "breakpoint_set_function", "Breakpoint" },
             // Watch
             { "watch_add", "Watch" },
             { "watch_remove", "Watch" },
             { "watch_list", "Watch" },
             // Thread
             { "thread_switch", "Thread" },
-            { "thread_freeze", "Thread" },
-            { "thread_thaw", "Thread" },
+            { "thread_set_frozen", "Thread" },
             { "thread_get_callstack", "Thread" },
             // Process
             { "process_list_debugged", "Process" },
@@ -90,7 +84,6 @@ namespace VsMcp.Extension.Tools
             { "exception_settings_set", "Exception" },
             // Memory
             { "memory_read", "Memory" },
-            { "memory_read_variable", "Memory" },
             // Parallel Debug
             { "parallel_stacks", "Parallel" },
             { "parallel_watch", "Parallel" },
@@ -108,12 +101,13 @@ namespace VsMcp.Extension.Tools
             { "ui_find_elements", "UI" },
             { "ui_get_element", "UI" },
             { "ui_click", "UI" },
+            { "ui_right_click", "UI" },
+            { "ui_drag", "UI" },
             { "ui_set_value", "UI" },
             { "ui_invoke", "UI" },
             // Console
             { "console_read", "Console" },
-            { "console_send_input", "Console" },
-            { "console_send_keys", "Console" },
+            { "console_send", "Console" },
             { "console_get_info", "Console" },
             // Web (CDP)
             { "web_connect", "Web" },
@@ -123,15 +117,9 @@ namespace VsMcp.Extension.Tools
             { "web_screenshot", "Web" },
             { "web_dom_get", "Web" },
             { "web_dom_query", "Web" },
-            { "web_dom_get_html", "Web" },
-            { "web_dom_get_attributes", "Web" },
-            { "web_console_enable", "Web" },
-            { "web_console_get", "Web" },
-            { "web_console_clear", "Web" },
+            { "web_console", "Web" },
             { "web_js_execute", "Web" },
-            { "web_network_enable", "Web" },
-            { "web_network_get", "Web" },
-            { "web_network_clear", "Web" },
+            { "web_network", "Web" },
             { "web_element_click", "Web" },
             { "web_element_set_value", "Web" },
             // Test
@@ -220,8 +208,24 @@ namespace VsMcp.Extension.Tools
             return Task.FromResult(McpToolResult.Success(new
             {
                 totalTools = allTools.Count,
-                tips = "Use build_solution instead of MSBuild CLI. Use debug_start instead of pressing F5. Use get_status instead of curl. Use output_read to read Build/Debug output panes. Use web_connect to connect to Chrome/Edge via CDP for web debugging.",
-                categories = ordered
+                categories = ordered,
+                guidelines = new
+                {
+                    ui_automation = "DPI SCALING: Screenshot pixel coordinates from ui_capture_window do NOT match screen coordinates used by ui_click/ui_drag due to DPI scaling. "
+                        + "NEVER estimate coordinates from screenshots. Always use ui_find_elements to get element bounds in screen coordinates, then calculate click/drag positions from those bounds. "
+                        + "POPUPS OUTSIDE WINDOW: WPF popups (context menu submenus, tooltips, etc.) may render outside the main window bounds. "
+                        + "ui_click/ui_drag reject coordinates outside the window bounds. "
+                        + "For elements outside the window, use ui_find_elements to locate the element by name, then use ui_click with the name parameter or ui_invoke with AutomationId instead of coordinates. "
+                        + "DRAG AND HIT-TESTING: ui_drag sends Win32 mouse events, so WPF visual hit-testing applies. "
+                        + "If a visual element overlaps the drag start position, the event goes to that element instead of the intended target. "
+                        + "When drag does not work as expected, use ui_get_tree or ui_find_elements to check what element is at the start position.",
+                    web_debugging = "Use web_connect to connect to Chrome/Edge (via CDP) or Firefox (via RDP). "
+                        + "Chrome/Edge: start with --remote-debugging-port (e.g. chrome --remote-debugging-port=9222). Auto-detection scans ports 9222-9229. "
+                        + "Firefox: start with -start-debugger-server (e.g. firefox -start-debugger-server 6000). Requires devtools.debugger.remote-enabled=true in about:config. "
+                        + "Use web_connect with browser='auto' (default) to auto-detect, or browser='chrome'/'firefox' to specify. "
+                        + "Call web_console/web_network with action='enable' to start monitoring before navigating. "
+                        + "Use web_js_execute for JavaScript evaluation, web_dom_query for CSS selectors, web_screenshot for page captures."
+                }
             }));
         }
 

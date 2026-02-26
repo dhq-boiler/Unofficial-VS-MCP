@@ -145,24 +145,15 @@ namespace VsMcp.Extension.Tools
 
             registry.Register(
                 new McpToolDefinition(
-                    "console_send_input",
-                    "Send text input (stdin) to the console of a debugged console application",
+                    "console_send",
+                    "Send input to the console of a debugged console application. Provide 'text' for text input or 'keys' for special keys (ctrl+c, ctrl+break, ctrl+z, enter, escape, tab, backspace, up, down, left, right).",
                     SchemaBuilder.Create()
-                        .AddString("text", "Text to send to the console", required: true)
-                        .AddBoolean("newline", "Append Enter key after text (default: true)")
+                        .AddString("text", "Text to send to the console")
+                        .AddString("keys", "Special key combination to send")
+                        .AddBoolean("newline", "Append Enter key after text (default: true, only for text)")
                         .AddInteger("processId", "PID of the debugged process (default: first debugged process)")
                         .Build()),
-                args => ConsoleSendInputAsync(accessor, args));
-
-            registry.Register(
-                new McpToolDefinition(
-                    "console_send_keys",
-                    "Send special keys to the console of a debugged console application (e.g. ctrl+c, enter, escape, arrow keys)",
-                    SchemaBuilder.Create()
-                        .AddString("keys", "Key combination to send: ctrl+c, ctrl+break, ctrl+z, enter, escape, tab, backspace, up, down, left, right", required: true)
-                        .AddInteger("processId", "PID of the debugged process (default: first debugged process)")
-                        .Build()),
-                args => ConsoleSendKeysAsync(accessor, args));
+                args => ConsoleSendAsync(accessor, args));
 
             registry.Register(
                 new McpToolDefinition(
@@ -319,64 +310,57 @@ namespace VsMcp.Extension.Tools
 
         #endregion
 
-        #region console_send_input
+        #region console_send
 
-        private static async Task<McpToolResult> ConsoleSendInputAsync(VsServiceAccessor accessor, JObject args)
+        private static async Task<McpToolResult> ConsoleSendAsync(VsServiceAccessor accessor, JObject args)
         {
             var text = args.Value<string>("text");
-            if (string.IsNullOrEmpty(text))
-                return McpToolResult.Error("Parameter 'text' is required.");
-
-            var (pid, error) = await ResolveProcessIdAsync(accessor, args);
-            if (error != null) return error;
-
-            bool newline = args["newline"]?.Value<bool>() ?? true;
-
-            return await Task.Run(() => ExecuteWithConsole((uint)pid, STD_INPUT_HANDLE, handle =>
-            {
-                var events = new List<INPUT_RECORD>();
-
-                foreach (char ch in text)
-                {
-                    events.Add(MakeKeyEvent(0, ch, true));
-                    events.Add(MakeKeyEvent(0, ch, false));
-                }
-
-                if (newline)
-                {
-                    events.Add(MakeKeyEvent(VK_RETURN, '\r', true));
-                    events.Add(MakeKeyEvent(VK_RETURN, '\r', false));
-                }
-
-                var arr = events.ToArray();
-                if (!WriteConsoleInput(handle, arr, (uint)arr.Length, out uint written))
-                {
-                    int err = Marshal.GetLastWin32Error();
-                    return McpToolResult.Error($"Failed to write console input. Win32 error: {err}");
-                }
-
-                return McpToolResult.Success($"Sent {text.Length} character(s){(newline ? " + Enter" : "")} to console (pid: {pid}).");
-            }));
-        }
-
-        #endregion
-
-        #region console_send_keys
-
-        private static async Task<McpToolResult> ConsoleSendKeysAsync(VsServiceAccessor accessor, JObject args)
-        {
             var keys = args.Value<string>("keys");
-            if (string.IsNullOrEmpty(keys))
-                return McpToolResult.Error("Parameter 'keys' is required.");
+
+            if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(keys))
+                return McpToolResult.Error("Either 'text' or 'keys' is required.");
 
             var (pid, error) = await ResolveProcessIdAsync(accessor, args);
             if (error != null) return error;
 
+            // Text input mode
+            if (!string.IsNullOrEmpty(text))
+            {
+                bool newline = args["newline"]?.Value<bool>() ?? true;
+
+                return await Task.Run(() => ExecuteWithConsole((uint)pid, STD_INPUT_HANDLE, handle =>
+                {
+                    var events = new List<INPUT_RECORD>();
+
+                    foreach (char ch in text)
+                    {
+                        events.Add(MakeKeyEvent(0, ch, true));
+                        events.Add(MakeKeyEvent(0, ch, false));
+                    }
+
+                    if (newline)
+                    {
+                        events.Add(MakeKeyEvent(VK_RETURN, '\r', true));
+                        events.Add(MakeKeyEvent(VK_RETURN, '\r', false));
+                    }
+
+                    var arr = events.ToArray();
+                    if (!WriteConsoleInput(handle, arr, (uint)arr.Length, out uint written))
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        return McpToolResult.Error($"Failed to write console input. Win32 error: {err}");
+                    }
+
+                    return McpToolResult.Success($"Sent {text.Length} character(s){(newline ? " + Enter" : "")} to console (pid: {pid}).");
+                }));
+            }
+
+            // Keys mode
             keys = keys.Trim().ToLowerInvariant();
 
             return await Task.Run(() =>
             {
-                // Ctrl+C and Ctrl+Break use GenerateConsoleCtrlEvent (no need for handle)
+                // Ctrl+C and Ctrl+Break use GenerateConsoleCtrlEvent
                 if (keys == "ctrl+c" || keys == "ctrl+break")
                 {
                     uint ctrlEvent = keys == "ctrl+c" ? CTRL_C_EVENT : CTRL_BREAK_EVENT;
@@ -393,7 +377,6 @@ namespace VsMcp.Extension.Tools
 
                         try
                         {
-                            // Protect our own process from the Ctrl+C signal
                             SetConsoleCtrlHandler(null, true);
                             try
                             {
