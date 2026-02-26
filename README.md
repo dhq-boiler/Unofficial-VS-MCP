@@ -8,7 +8,7 @@
 
 ## Features
 
-VS MCP Server exposes **99 tools** across the following categories:
+VS MCP Server exposes **106 tools** across the following categories:
 
 | Category | Tools | Description |
 |----------|------:|-------------|
@@ -16,13 +16,18 @@ VS MCP Server exposes **99 tools** across the following categories:
 | Solution & Project | 5 | Open/close solutions, list/inspect projects |
 | Build | 5 | Build solution/project, clean, rebuild, get build errors |
 | Editor | 7 | Open/close/read/write/edit files, find in files |
-| Debugger | 14 | Start/stop/restart, attach, stepping, call stack, locals, threads, evaluate |
-| Breakpoints | 7 | Set/remove/list, conditional, hit count, function breakpoints |
+| Edit Preview | 4 | Diff preview, approve/reject edits with VS diff viewer |
+| Code Navigation | 3 | Go to definition, find references, go to implementation |
+| Solution Explorer | 6 | Add/remove projects, files, and references |
+| Debugger | 12 | Start/stop/restart, attach, stepping, call stack, locals, threads, evaluate |
+| Breakpoints | 4 | Set/remove/list, enable/disable breakpoints |
 | Output & Diagnostics | 4 | Read/write output panes, error list, XAML binding errors |
-| Console | 4 | Read console output, send input/keys, get console info for debugged apps |
+| Console | 3 | Read console output, send input/keys, get console info for debugged apps |
 | UI Automation | 10 | Capture screenshots, inspect UI trees, find/click/right-click/drag/invoke elements |
-| Web | 18 | Browser automation via Chrome CDP and Firefox RDP — navigation, DOM, console, network, screenshots |
-| Advanced Debug | 22 | Watch, thread/process management, immediate window, registers, memory, parallel stacks |
+| Web | 12 | Browser automation via Chrome CDP and Firefox RDP — navigation, DOM, console, network, screenshots |
+| Test | 3 | Discover, run, and view test results |
+| NuGet | 5 | Search, install, update, remove NuGet packages |
+| Advanced Debug | 20 | Watch, thread/process management, immediate window, registers, memory, parallel stacks |
 
 ### Tool Details
 
@@ -71,6 +76,34 @@ VS MCP Server exposes **99 tools** across the following categories:
 | `get_active_document` | Get information about the currently active document in the editor |
 | `find_in_files` | Search for text in files within the solution |
 
+#### Edit Preview
+
+| Tool | Description |
+|------|-------------|
+| `edit_preview` | Show a diff preview of proposed changes in VS and create a pending edit for approval |
+| `edit_approve` | Approve a pending edit and apply the changes to the file |
+| `edit_reject` | Reject a pending edit and discard the changes |
+| `edit_list_pending` | List all pending edit previews with their status |
+
+#### Code Navigation
+
+| Tool | Description |
+|------|-------------|
+| `code_goto_definition` | Navigate to the definition of a symbol at the specified position |
+| `code_find_references` | Find all references of a symbol at the specified position |
+| `code_goto_implementation` | Navigate to the implementation of an interface or abstract member |
+
+#### Solution Explorer
+
+| Tool | Description |
+|------|-------------|
+| `solution_add_project` | Add an existing project to the current solution |
+| `solution_remove_project` | Remove a project from the current solution |
+| `project_add_file` | Add an existing file to a project |
+| `project_remove_file` | Remove a file from a project |
+| `project_add_reference` | Add a project-to-project reference |
+| `project_remove_reference` | Remove a reference from a project |
+
 #### Debugger
 
 | Tool | Description |
@@ -81,9 +114,7 @@ VS MCP Server exposes **99 tools** across the following categories:
 | `debug_attach` | Attach the debugger to a running process by name or PID |
 | `debug_break` | Break (pause) the debugger at the current execution point |
 | `debug_continue` | Continue (resume) execution after a breakpoint or break |
-| `debug_step_over` | Step over the current line (F10) |
-| `debug_step_into` | Step into the current function call (F11) |
-| `debug_step_out` | Step out of the current function (Shift+F11) |
+| `debug_step` | Step through code (direction: over, into, or out) |
 | `debug_get_callstack` | Get the current call stack of the active thread |
 | `debug_get_locals` | Get the local variables in the current stack frame |
 | `debug_get_threads` | Get all threads in the current debug session |
@@ -94,13 +125,10 @@ VS MCP Server exposes **99 tools** across the following categories:
 
 | Tool | Description |
 |------|-------------|
-| `breakpoint_set` | Set a breakpoint at a specific file and line |
-| `breakpoint_set_conditional` | Set a conditional breakpoint at a specific file and line |
+| `breakpoint_set` | Set a breakpoint (location, conditional, hit count, or function breakpoint) |
 | `breakpoint_remove` | Remove a breakpoint at a specific file and line |
 | `breakpoint_list` | List all breakpoints in the current solution |
 | `breakpoint_enable` | Enable or disable a breakpoint at a specific file and line |
-| `breakpoint_set_hitcount` | Set a breakpoint with a hit count condition at a specific file and line |
-| `breakpoint_set_function` | Set a breakpoint on a function by name |
 
 #### Output & Diagnostics
 
@@ -116,8 +144,7 @@ VS MCP Server exposes **99 tools** across the following categories:
 | Tool | Description |
 |------|-------------|
 | `console_read` | Read the console output buffer of a debugged console application |
-| `console_send_input` | Send text input (stdin) to the console of a debugged console application |
-| `console_send_keys` | Send special keys (Ctrl+C, Ctrl+Break, arrow keys, etc.) to a debugged console application |
+| `console_send` | Send text input or special keys to the console of a debugged console application |
 | `console_get_info` | Get console buffer size, cursor position, and window information of a debugged console application |
 
 #### UI Automation
@@ -148,8 +175,7 @@ VS MCP Server exposes **99 tools** across the following categories:
 | Tool | Description |
 |------|-------------|
 | `thread_switch` | Switch the active (current) thread by thread ID |
-| `thread_freeze` | Freeze a thread so it does not execute when the debugger continues |
-| `thread_thaw` | Thaw (unfreeze) a frozen thread so it resumes execution |
+| `thread_set_frozen` | Freeze or thaw a thread |
 | `thread_get_callstack` | Get the call stack of a specific thread by ID |
 
 #### Process
@@ -191,8 +217,7 @@ VS MCP Server exposes **99 tools** across the following categories:
 
 | Tool | Description |
 |------|-------------|
-| `memory_read` | Read memory bytes at a given address expression |
-| `memory_read_variable` | Get a variable's memory address and raw byte representation |
+| `memory_read` | Read memory bytes at an address expression or get a variable's memory representation |
 
 #### Parallel
 
@@ -213,17 +238,29 @@ VS MCP Server exposes **99 tools** across the following categories:
 | `web_screenshot` | Capture a screenshot of the current page |
 | `web_dom_get` | Get the DOM tree of the current page with configurable depth |
 | `web_dom_query` | Query DOM elements using a CSS selector |
-| `web_dom_get_html` | Get the outerHTML of a DOM element found by CSS selector |
-| `web_dom_get_attributes` | Get all attributes of a DOM element found by CSS selector |
-| `web_console_enable` | Start collecting browser console messages |
-| `web_console_get` | Get collected browser console messages |
-| `web_console_clear` | Clear the collected console message buffer |
+| `web_console` | Manage browser console messages (enable/get/clear) |
 | `web_js_execute` | Execute JavaScript in the browser page context |
-| `web_network_enable` | Start monitoring network requests and responses |
-| `web_network_get` | Get captured network requests/responses |
-| `web_network_clear` | Clear the captured network entry buffer |
+| `web_network` | Manage network monitoring (enable/get/clear) |
 | `web_element_click` | Click a DOM element found by CSS selector |
 | `web_element_set_value` | Set the value of an input element found by CSS selector |
+
+#### Test
+
+| Tool | Description |
+|------|-------------|
+| `test_discover` | Discover all tests in the solution or a specific project |
+| `test_run` | Run tests and get results with optional filtering by test name/category |
+| `test_results` | Get detailed results from the last test run (or a specific TRX file) |
+
+#### NuGet
+
+| Tool | Description |
+|------|-------------|
+| `nuget_list` | List installed NuGet packages for a specific project |
+| `nuget_search` | Search for NuGet packages on NuGet.org |
+| `nuget_install` | Install a NuGet package into a project |
+| `nuget_update` | Update a NuGet package to a specific version |
+| `nuget_uninstall` | Remove a NuGet package from a project |
 
 ## Requirements
 
