@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using EnvDTE;
+using EnvDTE90a;
 
 namespace VsMcp.Extension.Tools
 {
@@ -161,22 +162,38 @@ namespace VsMcp.Extension.Tools
         {
             try
             {
+                if (frame is StackFrame2 frame2)
+                    return frame2.FileName ?? "";
+            }
+            catch { }
+
+            try
+            {
                 var prop = frame.GetType().GetProperty("FileName");
                 if (prop != null) return prop.GetValue(frame)?.ToString() ?? "";
-                return "";
             }
-            catch { return ""; }
+            catch { }
+
+            return "";
         }
 
         public static int TryGetFrameLine(StackFrame frame)
         {
             try
             {
+                if (frame is StackFrame2 frame2)
+                    return checked((int)frame2.LineNumber);
+            }
+            catch { }
+
+            try
+            {
                 var prop = frame.GetType().GetProperty("LineNumber");
                 if (prop != null) return (int)(uint)prop.GetValue(frame);
-                return 0;
             }
-            catch { return 0; }
+            catch { }
+
+            return 0;
         }
 
         public static string TryGetThreadLocation(Thread thread)
