@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
@@ -100,15 +101,42 @@ namespace VsMcp.Extension.Tools
             catch { }
         }
 
+        private static bool IsCMakeFolderMode(DTE2 dte)
+        {
+            try
+            {
+                var solutionPath = dte.Solution?.FullName;
+                if (string.IsNullOrEmpty(solutionPath))
+                    return false;
+                if (solutionPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                // Folder open mode — treat as CMake if CMakeLists.txt exists at the root
+                return File.Exists(Path.Combine(solutionPath, "CMakeLists.txt"));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static async Task<McpToolResult> BuildSolutionAsync(VsServiceAccessor accessor)
         {
+            var isCMakeFolder = await accessor.RunOnUIThreadAsync(() =>
+            {
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+                StopDebuggingIfActive(d);
+                ShowOutputWindow(d);
+                return IsCMakeFolderMode(d);
+            });
+
+            if (isCMakeFolder)
+                return await ExecuteBuildCommandAndWaitAsync(accessor, "Build.BuildSolution", "Build");
+
             return await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                StopDebuggingIfActive(dte);
-                ShowOutputWindow(dte);
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
                 sb.Build(true);
@@ -123,11 +151,187 @@ namespace VsMcp.Extension.Tools
             });
         }
 
+        // Build/Output pane GUID — same value as the localized "Build" / "ビルド" pane
+        private const string BuildPaneGuid = "{1BD8A850-02D1-11D1-BEE7-00A0C913D1F8}";
+
+        // Sln-mode completion: "========== Build: 1 succeeded, 0 failed, ... ==========" /
+        // "========== ビルド: 成功 1, 失敗 0, ... =========="
+        private static readonly System.Text.RegularExpressions.Regex BuildDoneSlnRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"={3,}\s*(?:Build|Rebuild All|Clean|ビルド|すべてリビルド|クリーン)\s*[:：]\s*(?:succeeded\s+(?<ok_en>\d+)|成功\s+(?<ok_jp>\d+))\s*,\s*(?:failed\s+(?<ng_en>\d+)|失敗\s+(?<ng_jp>\d+))",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // CMake folder-mode completion: no per-project counters, single line per build session.
+        // Japanese (VS 2026): "すべてビルド が成功しました。" / "すべてリビルド が失敗しました。" / "すべてクリーン が成功しました。"
+        // English (best-effort): "Build All succeeded." / "Rebuild All failed." / "Clean All succeeded."
+        private static readonly System.Text.RegularExpressions.Regex BuildDoneFolderRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"(?:^|\n)\s*すべて(?:ビルド|リビルド|クリーン)\s*が\s*(?<result_jp>成功|失敗)\s*しました。?\s*(?:\r?\n|$)" +
+                @"|(?:^|\n)\s*(?:Build|Rebuild|Clean)\s+All\s+(?<result_en>succeeded|failed|FAILED)\.?\s*(?:\r?\n|$)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static string ReadBuildPaneText(DTE2 dte)
+        {
+            try
+            {
+                var outputWindow = dte.ToolWindows.OutputWindow;
+                foreach (OutputWindowPane pane in outputWindow.OutputWindowPanes)
+                {
+                    try
+                    {
+                        if (!string.Equals(pane.Guid, BuildPaneGuid, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        var doc = pane.TextDocument;
+                        if (doc == null) return string.Empty;
+                        var ep = doc.StartPoint.CreateEditPoint();
+                        return ep.GetText(doc.EndPoint);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return string.Empty;
+        }
+
+        private static void WriteToBuildPane(DTE2 dte, string text)
+        {
+            try
+            {
+                var outputWindow = dte.ToolWindows.OutputWindow;
+                foreach (OutputWindowPane pane in outputWindow.OutputWindowPanes)
+                {
+                    try
+                    {
+                        if (string.Equals(pane.Guid, BuildPaneGuid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            pane.OutputString(text);
+                            return;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// CMake folder-mode fallback: SolutionBuild2.Build() doesn't drive CMake targets
+        /// and SolutionBuild2.BuildState never transitions, so dispatch the IDE command
+        /// and parse the Build output pane for completion markers.
+        /// </summary>
+        private static async Task<McpToolResult> ExecuteBuildCommandAndWaitAsync(
+            VsServiceAccessor accessor, string commandName, string actionName)
+        {
+            // Inject a unique marker into the Build pane right before dispatch.
+            // - If VS appends to the pane (sln mode): marker stays, new content follows it.
+            // - If VS clears the pane (CMake folder mode): marker disappears; we treat
+            //   the entire post-dispatch pane as new content.
+            // This avoids the length-based race where a 2nd identical build of
+            // "ninja: no work to do" produces output that matches the previous baseline.
+            var marker = $"[VsMcp:{Guid.NewGuid():N}]";
+
+            try
+            {
+                await accessor.RunOnUIThreadAsync(() =>
+                {
+                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                        .Run(() => accessor.GetDteAsync());
+                    WriteToBuildPane(dte, marker + "\n");
+                    dte.ExecuteCommand(commandName);
+                });
+            }
+            catch (Exception ex)
+            {
+                return McpToolResult.Error($"{actionName} command '{commandName}' failed to dispatch: {ex.Message}");
+            }
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(30);
+            while (true)
+            {
+                var fullText = await accessor.RunOnUIThreadAsync(() =>
+                {
+                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                        .Run(() => accessor.GetDteAsync());
+                    return ReadBuildPaneText(dte);
+                });
+
+                string newText;
+                var markerIdx = fullText.LastIndexOf(marker, StringComparison.Ordinal);
+                if (markerIdx >= 0)
+                {
+                    // Marker still in pane — new content is everything after it
+                    newText = fullText.Substring(markerIdx + marker.Length);
+                }
+                else
+                {
+                    // Marker is gone — VS cleared the pane; treat everything as new
+                    newText = fullText;
+                }
+
+                // Try sln-mode pattern first (richer info: per-project counts)
+                var slnMatch = BuildDoneSlnRegex.Match(newText);
+                if (slnMatch.Success)
+                {
+                    int succeededCount = ParseInt(slnMatch.Groups["ok_en"].Value) + ParseInt(slnMatch.Groups["ok_jp"].Value);
+                    int failedCount = ParseInt(slnMatch.Groups["ng_en"].Value) + ParseInt(slnMatch.Groups["ng_jp"].Value);
+                    var ok = failedCount == 0;
+                    return McpToolResult.Success(new
+                    {
+                        success = ok,
+                        succeededProjects = succeededCount,
+                        failedProjects = failedCount,
+                        message = ok
+                            ? $"{actionName} succeeded ({succeededCount} succeeded, {failedCount} failed)"
+                            : $"{actionName} failed ({succeededCount} succeeded, {failedCount} failed)"
+                    });
+                }
+
+                // Fall back to CMake folder-mode pattern (single succeeded/failed line)
+                var folderMatch = BuildDoneFolderRegex.Match(newText);
+                if (folderMatch.Success)
+                {
+                    var resultJp = folderMatch.Groups["result_jp"].Value;
+                    var resultEn = folderMatch.Groups["result_en"].Value;
+                    var ok = resultJp == "成功"
+                        || string.Equals(resultEn, "succeeded", StringComparison.OrdinalIgnoreCase);
+                    return McpToolResult.Success(new
+                    {
+                        success = ok,
+                        succeededProjects = ok ? 1 : 0,
+                        failedProjects = ok ? 0 : 1,
+                        message = ok
+                            ? $"{actionName} succeeded (CMake folder mode)"
+                            : $"{actionName} failed (CMake folder mode)"
+                    });
+                }
+
+                if (DateTime.UtcNow > deadline)
+                    return McpToolResult.Error($"{actionName} timed out after 30 minutes (no completion marker in Build output pane)");
+
+                await Task.Delay(500);
+            }
+        }
+
+        private static int ParseInt(string s)
+        {
+            return int.TryParse(s, out var v) ? v : 0;
+        }
+
         private static async Task<McpToolResult> BuildProjectAsync(VsServiceAccessor accessor, JObject args)
         {
             var name = args.Value<string>("name");
             if (string.IsNullOrEmpty(name))
                 return McpToolResult.Error("Parameter 'name' is required");
+
+            var isCMakeFolder = await accessor.RunOnUIThreadAsync(() =>
+            {
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+                return IsCMakeFolderMode(d);
+            });
+
+            if (isCMakeFolder)
+                return McpToolResult.Error("build_project is not supported in CMake folder mode (no .sln). Use build_solution to build all CMake targets, or run CMake from the terminal for a specific target.");
 
             return await accessor.RunOnUIThreadAsync(() =>
             {
@@ -169,13 +373,22 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> CleanAsync(VsServiceAccessor accessor)
         {
+            var isCMakeFolder = await accessor.RunOnUIThreadAsync(() =>
+            {
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+                StopDebuggingIfActive(d);
+                ShowOutputWindow(d);
+                return IsCMakeFolderMode(d);
+            });
+
+            if (isCMakeFolder)
+                return await ExecuteBuildCommandAndWaitAsync(accessor, "Build.CleanSolution", "Clean");
+
             return await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                StopDebuggingIfActive(dte);
-                ShowOutputWindow(dte);
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
                 sb.Clean(true);
@@ -186,13 +399,22 @@ namespace VsMcp.Extension.Tools
 
         private static async Task<McpToolResult> RebuildAsync(VsServiceAccessor accessor)
         {
+            var isCMakeFolder = await accessor.RunOnUIThreadAsync(() =>
+            {
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                    .Run(() => accessor.GetDteAsync());
+                StopDebuggingIfActive(d);
+                ShowOutputWindow(d);
+                return IsCMakeFolderMode(d);
+            });
+
+            if (isCMakeFolder)
+                return await ExecuteBuildCommandAndWaitAsync(accessor, "Build.RebuildSolution", "Rebuild");
+
             return await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                StopDebuggingIfActive(dte);
-                ShowOutputWindow(dte);
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
                 sb.Build(true);
