@@ -26,9 +26,11 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "build_project",
-                    "Build a specific project",
+                    "Build a specific project. If configuration/platform is passed, that combo is activated before building; otherwise the currently active solution configuration is used. The response includes the configuration/platform actually built.",
                     SchemaBuilder.Create()
                         .AddString("name", "Project name to build", required: true)
+                        .AddString("configuration", "Solution configuration to build (e.g. 'Debug', 'Release'). Optional — defaults to the active configuration.")
+                        .AddString("platform", "Solution platform to build (e.g. 'Any CPU', 'x64'). Optional — defaults to the active platform.")
                         .Build()),
                 args => BuildProjectAsync(accessor, args));
 
@@ -139,6 +141,18 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
+
+                // Report the active configuration this build ran under so callers can verify
+                // they built what they intended (Debug vs Release) without reading the output pane.
+                string cfgName = null, cfgPlatform = null;
+                try
+                {
+                    var ac = (SolutionConfiguration2)sb.ActiveConfiguration;
+                    cfgName = ac.Name;
+                    cfgPlatform = ac.PlatformName;
+                }
+                catch { }
+
                 sb.Build(true);
 
                 var succeeded = sb.LastBuildInfo == 0;
@@ -146,7 +160,9 @@ namespace VsMcp.Extension.Tools
                 {
                     success = succeeded,
                     failedProjects = sb.LastBuildInfo,
-                    message = succeeded ? "Build succeeded" : $"Build failed with {sb.LastBuildInfo} project(s) having errors"
+                    configuration = cfgName,
+                    platform = cfgPlatform,
+                    message = succeeded ? $"Build succeeded ({cfgName}|{cfgPlatform})" : $"Build failed with {sb.LastBuildInfo} project(s) having errors ({cfgName}|{cfgPlatform})"
                 });
             });
         }
@@ -333,6 +349,9 @@ namespace VsMcp.Extension.Tools
             if (isCMakeFolder)
                 return McpToolResult.Error("build_project is not supported in CMake folder mode (no .sln). Use build_solution to build all CMake targets, or run CMake from the terminal for a specific target.");
 
+            var configuration = args.Value<string>("configuration");
+            var platform = args.Value<string>("platform");
+
             return await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
@@ -342,15 +361,64 @@ namespace VsMcp.Extension.Tools
                 ShowOutputWindow(dte);
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
-                string config;
+
+                // If a configuration/platform was requested, activate it first (same UI-thread
+                // block as the build, so the activation is reflected before BuildProject runs).
+                if (!string.IsNullOrEmpty(configuration) || !string.IsNullOrEmpty(platform))
+                {
+                    string targetName = configuration;
+                    string targetPlatform = platform;
+                    try
+                    {
+                        var ac = (SolutionConfiguration2)sb.ActiveConfiguration;
+                        targetName = configuration ?? ac.Name;
+                        targetPlatform = platform ?? ac.PlatformName;
+                    }
+                    catch { }
+
+                    var activated = false;
+                    foreach (SolutionConfiguration2 sc in sb.SolutionConfigurations)
+                    {
+                        try
+                        {
+                            if (string.Equals(sc.Name, targetName, StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(sc.PlatformName, targetPlatform, StringComparison.OrdinalIgnoreCase))
+                            {
+                                sc.Activate();
+                                activated = true;
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (!activated)
+                    {
+                        var avail = new List<string>();
+                        foreach (SolutionConfiguration2 sc in sb.SolutionConfigurations)
+                        {
+                            try { avail.Add($"{sc.Name}|{sc.PlatformName}"); }
+                            catch { }
+                        }
+                        return McpToolResult.Error($"Configuration '{targetName}|{targetPlatform}' not found. Available: {string.Join(", ", avail)}");
+                    }
+                }
+
+                // Read the (now current) active configuration to build with and to report back.
+                // BuildProject expects the solution configuration *name* only (e.g. "Release"),
+                // NOT a "Name|Platform" concatenation — passing the latter makes VS fail to
+                // resolve the configuration and silently fall back to Debug.
+                string builtName;
+                string builtPlatform = null;
                 try
                 {
-                    var activeConfig = (SolutionConfiguration2)sb.ActiveConfiguration;
-                    config = activeConfig.Name + "|" + activeConfig.PlatformName;
+                    var ac = (SolutionConfiguration2)sb.ActiveConfiguration;
+                    builtName = ac.Name;
+                    builtPlatform = ac.PlatformName;
                 }
                 catch
                 {
-                    config = sb.ActiveConfiguration?.Name ?? "Debug";
+                    builtName = sb.ActiveConfiguration?.Name ?? "Debug";
                 }
 
                 // Find the project unique name (recursing into solution folders)
@@ -359,14 +427,18 @@ namespace VsMcp.Extension.Tools
                 if (uniqueName == null)
                     return McpToolResult.Error($"Project '{name}' not found");
 
-                sb.BuildProject(config, uniqueName, true);
+                sb.BuildProject(builtName, uniqueName, true);
 
                 var succeeded = sb.LastBuildInfo == 0;
                 return McpToolResult.Success(new
                 {
                     success = succeeded,
                     project = name,
-                    message = succeeded ? $"Project '{name}' built successfully" : $"Project '{name}' build failed"
+                    configuration = builtName,
+                    platform = builtPlatform,
+                    message = succeeded
+                        ? $"Project '{name}' built successfully ({builtName}|{builtPlatform})"
+                        : $"Project '{name}' build failed ({builtName}|{builtPlatform})"
                 });
             });
         }
@@ -417,6 +489,17 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
+
+                // Report the active configuration this rebuild ran under (see build_solution).
+                string cfgName = null, cfgPlatform = null;
+                try
+                {
+                    var ac = (SolutionConfiguration2)sb.ActiveConfiguration;
+                    cfgName = ac.Name;
+                    cfgPlatform = ac.PlatformName;
+                }
+                catch { }
+
                 sb.Build(true);
 
                 var succeeded = sb.LastBuildInfo == 0;
@@ -424,7 +507,9 @@ namespace VsMcp.Extension.Tools
                 {
                     success = succeeded,
                     failedProjects = sb.LastBuildInfo,
-                    message = succeeded ? "Rebuild succeeded" : $"Rebuild failed with {sb.LastBuildInfo} project(s) having errors"
+                    configuration = cfgName,
+                    platform = cfgPlatform,
+                    message = succeeded ? $"Rebuild succeeded ({cfgName}|{cfgPlatform})" : $"Rebuild failed with {sb.LastBuildInfo} project(s) having errors ({cfgName}|{cfgPlatform})"
                 });
             });
         }
