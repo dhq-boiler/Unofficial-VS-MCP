@@ -138,6 +138,33 @@ namespace VsMcp.Extension.McpServer
                         return;
                     }
 
+                    // 2026-07-28 §Streamable HTTP: if Mcp-Method / Mcp-Name headers are present,
+                    // they MUST match the request body. Reject with HeaderMismatchError otherwise.
+                    var headerMethod = request.Headers[McpConstants.HeaderMcpMethod];
+                    if (!string.IsNullOrEmpty(headerMethod) && !string.Equals(headerMethod, rpcRequest.Method, StringComparison.Ordinal))
+                    {
+                        var mismatchResp = JsonRpcResponse.ErrorResponse(
+                            rpcRequest.Id,
+                            McpConstants.HeaderMismatch,
+                            $"Mcp-Method header '{headerMethod}' does not match body method '{rpcRequest.Method}'.");
+                        await WriteResponseAsync(response, 200, JsonConvert.SerializeObject(mismatchResp));
+                        return;
+                    }
+                    var headerName = request.Headers[McpConstants.HeaderMcpName];
+                    if (!string.IsNullOrEmpty(headerName) && rpcRequest.Method == McpConstants.MethodToolsCall)
+                    {
+                        var bodyName = rpcRequest.Params?.Value<string>("name");
+                        if (!string.IsNullOrEmpty(bodyName) && !string.Equals(headerName, bodyName, StringComparison.Ordinal))
+                        {
+                            var mismatchResp = JsonRpcResponse.ErrorResponse(
+                                rpcRequest.Id,
+                                McpConstants.HeaderMismatch,
+                                $"Mcp-Name header '{headerName}' does not match tools/call body name '{bodyName}'.");
+                            await WriteResponseAsync(response, 200, JsonConvert.SerializeObject(mismatchResp));
+                            return;
+                        }
+                    }
+
                     var method = rpcRequest.Method ?? "(null)";
                     McpRequestRouter.Log($"[HTTP] >>> {method} id={rpcRequest.Id} - routing start");
 

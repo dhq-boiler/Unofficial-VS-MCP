@@ -154,6 +154,14 @@ namespace VsMcp.StdioProxy
                     continue;
                 }
 
+                // 2026-07-28: reject unsupported protocolVersion advertised via _meta.
+                var versionError = CheckProtocolVersion(request, id);
+                if (versionError != null)
+                {
+                    stdout.WriteLine(versionError);
+                    continue;
+                }
+
                 // Route based on method
                 string response = null;
 
@@ -161,7 +169,11 @@ namespace VsMcp.StdioProxy
                 {
                     case McpConstants.MethodInitialize:
                         // Always respond locally
-                        response = BuildInitializeResponse(id);
+                        response = BuildInitializeResponse(id, request);
+                        break;
+
+                    case McpConstants.MethodServerDiscover:
+                        response = BuildServerDiscoverResponse(id);
                         break;
 
                     case McpConstants.MethodInitialized:
@@ -170,14 +182,14 @@ namespace VsMcp.StdioProxy
                         continue;
 
                     case McpConstants.MethodPing:
-                        // Always respond locally
-                        response = BuildJsonRpcResult(id, new JObject());
+                        // Deprecated in 2026-07-28 but kept for legacy clients.
+                        response = BuildJsonRpcResult(id, WrapResult(new JObject()));
                         break;
 
                     case McpConstants.MethodToolsList:
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, id, ct);
+                            response = await TryRelayAsync(line, method, null, id, ct);
                             // Apply tool filter to relayed response
                             if (response != null && _toolFilter != null)
                             {
@@ -201,7 +213,7 @@ namespace VsMcp.StdioProxy
                         }
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, id, ct);
+                            response = await TryRelayAsync(line, method, toolName, id, ct);
                         }
                         if (response == null)
                         {
@@ -222,7 +234,7 @@ namespace VsMcp.StdioProxy
 
                         if (_baseUrl != null)
                         {
-                            response = await TryRelayAsync(line, id, ct);
+                            response = await TryRelayAsync(line, method, null, id, ct);
                         }
                         if (response == null)
                         {
@@ -254,12 +266,18 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static async Task<string> TryRelayAsync(string requestJson, JToken id, CancellationToken ct)
+        private static async Task<string> TryRelayAsync(string requestJson, string method, string toolName, JToken id, CancellationToken ct)
         {
             try
             {
                 var mcpUrl = $"{_baseUrl}/mcp";
                 var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                // 2026-07-28 §Streamable HTTP: Mcp-Method (and Mcp-Name for tools/call)
+                // let intermediaries route without parsing the JSON body.
+                if (!string.IsNullOrEmpty(method))
+                    content.Headers.TryAddWithoutValidation(McpConstants.HeaderMcpMethod, method);
+                if (!string.IsNullOrEmpty(toolName))
+                    content.Headers.TryAddWithoutValidation(McpConstants.HeaderMcpName, toolName);
                 Log($"[HTTP] PostAsync id={id} to {mcpUrl}...");
                 var response = await HttpClient.PostAsync(mcpUrl, content, ct);
                 Log($"[HTTP] PostAsync id={id} status={response.StatusCode}");
@@ -313,7 +331,7 @@ namespace VsMcp.StdioProxy
                         },
                         ["isError"] = true
                     };
-                    return BuildJsonRpcResult(id, timeoutResult);
+                    return BuildJsonRpcResult(id, WrapResult(timeoutResult));
                 }
                 return null;
             }
@@ -324,7 +342,50 @@ namespace VsMcp.StdioProxy
             }
         }
 
-        private static string BuildInitializeResponse(JToken id)
+        private static string CheckProtocolVersion(JObject request, JToken id)
+        {
+            var meta = request?["params"]?["_meta"] as JObject;
+            var requested = meta?.Value<string>(McpConstants.MetaProtocolVersion);
+            if (string.IsNullOrEmpty(requested))
+                return null;
+
+            if (!McpConstants.SupportedProtocolVersions.Contains(requested))
+            {
+                var data = new JObject
+                {
+                    ["supported"] = new JArray(McpConstants.SupportedProtocolVersions.ToArray()),
+                    ["latest"] = McpConstants.ProtocolVersion,
+                };
+                return BuildJsonRpcError(id, McpConstants.UnsupportedProtocolVersion,
+                    $"Unsupported protocol version: {requested}", data);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Attaches resultType and _meta.serverInfo per 2026-07-28. Safe to always emit;
+        /// older clients ignore unknown fields.
+        /// </summary>
+        private static JObject WrapResult(JObject inner)
+        {
+            if (inner == null) inner = new JObject();
+            if (inner["resultType"] == null)
+                inner["resultType"] = McpConstants.ResultTypeComplete;
+
+            var meta = inner["_meta"] as JObject ?? new JObject();
+            if (meta[McpConstants.MetaServerInfo] == null)
+            {
+                meta[McpConstants.MetaServerInfo] = new JObject
+                {
+                    ["name"] = McpConstants.ServerName,
+                    ["version"] = McpConstants.ServerVersion,
+                };
+            }
+            inner["_meta"] = meta;
+            return inner;
+        }
+
+        private static string BuildInstructionsWithSlnHints()
         {
             var toolCount = GetFilteredToolCount();
             var instructions = McpConstants.GetInstructions(toolCount);
@@ -345,26 +406,56 @@ namespace VsMcp.StdioProxy
                                   + " Ask the user which solution they want to work with.";
                 }
             }
+            return instructions;
+        }
+
+        private static string BuildInitializeResponse(JToken id, JObject request)
+        {
+            // Echo the client's requested protocolVersion when supported.
+            var requestedVersion = request?["params"]?.Value<string>("protocolVersion");
+            var negotiated = !string.IsNullOrEmpty(requestedVersion)
+                             && McpConstants.SupportedProtocolVersions.Contains(requestedVersion)
+                ? requestedVersion
+                : McpConstants.ProtocolVersion;
 
             var result = new JObject
             {
-                ["protocolVersion"] = McpConstants.ProtocolVersion,
+                ["protocolVersion"] = negotiated,
                 ["capabilities"] = new JObject
                 {
-                    ["tools"] = new JObject
-                    {
-                        ["listChanged"] = false
-                    }
+                    ["tools"] = new JObject { ["listChanged"] = false },
+                    ["extensions"] = new JObject(),
                 },
                 ["serverInfo"] = new JObject
                 {
                     ["name"] = McpConstants.ServerName,
-                    ["version"] = McpConstants.ServerVersion
+                    ["version"] = McpConstants.ServerVersion,
                 },
-                ["instructions"] = instructions
+                ["instructions"] = BuildInstructionsWithSlnHints(),
             };
 
-            return BuildJsonRpcResult(id, result);
+            return BuildJsonRpcResult(id, WrapResult(result));
+        }
+
+        private static string BuildServerDiscoverResponse(JToken id)
+        {
+            var result = new JObject
+            {
+                ["supportedProtocolVersions"] = new JArray(McpConstants.SupportedProtocolVersions.ToArray()),
+                ["latestProtocolVersion"] = McpConstants.ProtocolVersion,
+                ["capabilities"] = new JObject
+                {
+                    ["tools"] = new JObject { ["listChanged"] = false },
+                    ["extensions"] = new JObject(),
+                },
+                ["serverInfo"] = new JObject
+                {
+                    ["name"] = McpConstants.ServerName,
+                    ["version"] = McpConstants.ServerVersion,
+                },
+                ["instructions"] = BuildInstructionsWithSlnHints(),
+            };
+            return BuildJsonRpcResult(id, WrapResult(result));
         }
 
         private static string BuildToolsListFromCache(JToken id)
@@ -388,7 +479,21 @@ namespace VsMcp.StdioProxy
             }
 
             FilterToolsList(result);
-            return BuildJsonRpcResult(id, result);
+            SortToolsList(result);
+
+            // CacheableResult fields (2026-07-28).
+            result["ttlMs"] = McpConstants.DefaultCacheTtlMs;
+            result["cacheScope"] = McpConstants.CacheScopePublic;
+
+            return BuildJsonRpcResult(id, WrapResult(result));
+        }
+
+        private static void SortToolsList(JObject result)
+        {
+            var tools = result["tools"] as JArray;
+            if (tools == null) return;
+            var sorted = new JArray(tools.OrderBy(t => t?["name"]?.Value<string>() ?? string.Empty, StringComparer.Ordinal));
+            result["tools"] = sorted;
         }
 
         private static string FilterRelayedToolsList(string responseJson)
@@ -545,7 +650,7 @@ namespace VsMcp.StdioProxy
                 ["isError"] = true
             };
 
-            return BuildJsonRpcResult(id, errorResult);
+            return BuildJsonRpcResult(id, WrapResult(errorResult));
         }
 
         private static string BuildJsonRpcResult(JToken id, JObject result)
@@ -559,17 +664,21 @@ namespace VsMcp.StdioProxy
             return response.ToString(Newtonsoft.Json.Formatting.None);
         }
 
-        private static string BuildJsonRpcError(JToken id, int code, string message)
+        private static string BuildJsonRpcError(JToken id, int code, string message, JObject data = null)
         {
+            var errorObj = new JObject
+            {
+                ["code"] = code,
+                ["message"] = message,
+            };
+            if (data != null)
+                errorObj["data"] = data;
+
             var response = new JObject
             {
                 ["jsonrpc"] = "2.0",
                 ["id"] = id,
-                ["error"] = new JObject
-                {
-                    ["code"] = code,
-                    ["message"] = message
-                }
+                ["error"] = errorObj,
             };
             return response.ToString(Newtonsoft.Json.Formatting.None);
         }

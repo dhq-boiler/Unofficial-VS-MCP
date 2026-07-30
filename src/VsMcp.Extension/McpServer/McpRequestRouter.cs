@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +14,8 @@ namespace VsMcp.Extension.McpServer
 {
     /// <summary>
     /// Routes JSON-RPC 2.0 requests to the appropriate MCP handler.
+    /// Supports protocol versions up to 2026-07-28 (stateless, server/discover, CacheableResult).
+    /// Legacy initialize/ping handshakes remain accepted for older clients.
     /// </summary>
     public class McpRequestRouter
     {
@@ -41,6 +44,12 @@ namespace VsMcp.Extension.McpServer
         {
             try
             {
+                // 2026-07-28: every request may carry protocolVersion in params._meta.
+                // If present and unsupported, reject with UnsupportedProtocolVersion.
+                var versionCheck = CheckProtocolVersion(request);
+                if (versionCheck != null)
+                    return versionCheck;
+
                 switch (request.Method)
                 {
                     case McpConstants.MethodInitialize:
@@ -50,8 +59,12 @@ namespace VsMcp.Extension.McpServer
                         // Notification, no response needed
                         return null;
 
+                    case McpConstants.MethodServerDiscover:
+                        return HandleServerDiscover(request);
+
                     case McpConstants.MethodPing:
-                        return JsonRpcResponse.Success(request.Id, new JObject());
+                        // Deprecated in 2026-07-28 but kept for legacy clients.
+                        return JsonRpcResponse.Success(request.Id, WrapResult(new JObject()));
 
                     case McpConstants.MethodToolsList:
                         return HandleToolsList(request);
@@ -75,43 +88,120 @@ namespace VsMcp.Extension.McpServer
             }
         }
 
-        private JsonRpcResponse HandleInitialize(JsonRpcRequest request)
+        private static JsonRpcResponse CheckProtocolVersion(JsonRpcRequest request)
+        {
+            var meta = request.Params?["_meta"] as JObject;
+            var requested = meta?.Value<string>(McpConstants.MetaProtocolVersion);
+            if (string.IsNullOrEmpty(requested))
+                return null;
+
+            if (!McpConstants.SupportedProtocolVersions.Contains(requested))
+            {
+                return JsonRpcResponse.ErrorResponse(
+                    request.Id,
+                    McpConstants.UnsupportedProtocolVersion,
+                    $"Unsupported protocol version: {requested}. Supported: {string.Join(", ", McpConstants.SupportedProtocolVersions)}",
+                    new JObject
+                    {
+                        ["supported"] = new JArray(McpConstants.SupportedProtocolVersions.ToArray()),
+                        ["latest"] = McpConstants.ProtocolVersion,
+                    });
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Adds resultType and server-info _meta to a result JObject, per 2026-07-28 spec.
+        /// Older clients ignore unknown fields, so this is safe to always emit.
+        /// </summary>
+        private static JObject WrapResult(JObject inner)
+        {
+            if (inner == null) inner = new JObject();
+            if (inner["resultType"] == null)
+                inner["resultType"] = McpConstants.ResultTypeComplete;
+
+            var meta = inner["_meta"] as JObject ?? new JObject();
+            if (meta[McpConstants.MetaServerInfo] == null)
+            {
+                meta[McpConstants.MetaServerInfo] = new JObject
+                {
+                    ["name"] = McpConstants.ServerName,
+                    ["version"] = McpConstants.ServerVersion,
+                };
+            }
+            inner["_meta"] = meta;
+            return inner;
+        }
+
+        private JsonRpcResponse HandleServerDiscover(JsonRpcRequest request)
         {
             var toolCount = _registry.GetAllDefinitions().Count;
             var result = new JObject
             {
-                ["protocolVersion"] = McpConstants.ProtocolVersion,
+                ["supportedProtocolVersions"] = new JArray(McpConstants.SupportedProtocolVersions.ToArray()),
+                ["latestProtocolVersion"] = McpConstants.ProtocolVersion,
                 ["capabilities"] = new JObject
                 {
-                    ["tools"] = new JObject
-                    {
-                        ["listChanged"] = false
-                    }
+                    ["tools"] = new JObject { ["listChanged"] = false },
+                    ["extensions"] = new JObject(),
                 },
                 ["serverInfo"] = new JObject
                 {
                     ["name"] = McpConstants.ServerName,
-                    ["version"] = McpConstants.ServerVersion
+                    ["version"] = McpConstants.ServerVersion,
                 },
-                ["instructions"] = McpConstants.GetInstructions(toolCount)
+                ["instructions"] = McpConstants.GetInstructions(toolCount),
             };
-            return JsonRpcResponse.Success(request.Id, result);
+            return JsonRpcResponse.Success(request.Id, WrapResult(result));
+        }
+
+        private JsonRpcResponse HandleInitialize(JsonRpcRequest request)
+        {
+            var toolCount = _registry.GetAllDefinitions().Count;
+
+            // Echo the client's requested protocolVersion when we support it; otherwise fall back to our latest.
+            var requestedVersion = request.Params?.Value<string>("protocolVersion");
+            var negotiated = !string.IsNullOrEmpty(requestedVersion)
+                             && McpConstants.SupportedProtocolVersions.Contains(requestedVersion)
+                ? requestedVersion
+                : McpConstants.ProtocolVersion;
+
+            var result = new JObject
+            {
+                ["protocolVersion"] = negotiated,
+                ["capabilities"] = new JObject
+                {
+                    ["tools"] = new JObject { ["listChanged"] = false },
+                    ["extensions"] = new JObject(),
+                },
+                ["serverInfo"] = new JObject
+                {
+                    ["name"] = McpConstants.ServerName,
+                    ["version"] = McpConstants.ServerVersion,
+                },
+                ["instructions"] = McpConstants.GetInstructions(toolCount),
+            };
+            return JsonRpcResponse.Success(request.Id, WrapResult(result));
         }
 
         private JsonRpcResponse HandleToolsList(JsonRpcRequest request)
         {
             var tools = _registry.GetAllDefinitions();
             var toolsArray = new JArray();
-            foreach (var tool in tools)
+            // 2026-07-28 §minor: return tools in a deterministic order for cache-friendliness.
+            foreach (var tool in tools.OrderBy(t => t.Name, StringComparer.Ordinal))
             {
                 toolsArray.Add(JObject.FromObject(tool));
             }
 
             var result = new JObject
             {
-                ["tools"] = toolsArray
+                ["tools"] = toolsArray,
+                // CacheableResult — required by 2026-07-28.
+                ["ttlMs"] = McpConstants.DefaultCacheTtlMs,
+                ["cacheScope"] = McpConstants.CacheScopePublic,
             };
-            return JsonRpcResponse.Success(request.Id, result);
+            return JsonRpcResponse.Success(request.Id, WrapResult(result));
         }
 
         private async Task<JsonRpcResponse> HandleToolsCallAsync(JsonRpcRequest request)
@@ -148,7 +238,7 @@ namespace VsMcp.Extension.McpServer
                 {
                     Log($"[Router] {toolName}: UI thread switch TIMED OUT (10s)");
                     var timeoutResult = McpToolResult.Error("Visual Studio is not responding. The UI thread may be blocked by a modal dialog.");
-                    return JsonRpcResponse.Success(request.Id, timeoutResult);
+                    return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(timeoutResult)));
                 }
                 Log($"[Router] {toolName}: UI thread OK, starting tool via Task.Run...");
 
@@ -164,31 +254,31 @@ namespace VsMcp.Extension.McpServer
                     var timeoutResult = McpToolResult.Error(
                         $"Tool '{toolName}' timed out after 60 seconds. "
                         + "Visual Studio may be busy or blocked by a modal dialog.");
-                    return JsonRpcResponse.Success(request.Id, timeoutResult);
+                    return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(timeoutResult)));
                 }
 
                 Log($"[Router] {toolName}: handler completed, awaiting result...");
                 var toolResult = await toolTask.ConfigureAwait(false);
                 Log($"[Router] {toolName}: returning result (isError={toolResult?.IsError})");
-                return JsonRpcResponse.Success(request.Id, toolResult);
+                return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(toolResult)));
             }
             catch (COMException ex)
             {
                 Log($"[Router] {toolName}: COMException: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Visual Studio connection lost: {ex.Message}");
-                return JsonRpcResponse.Success(request.Id, errorResult);
+                return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(errorResult)));
             }
             catch (InvalidComObjectException ex)
             {
                 Log($"[Router] {toolName}: InvalidComObjectException: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Visual Studio instance is no longer available: {ex.Message}");
-                return JsonRpcResponse.Success(request.Id, errorResult);
+                return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(errorResult)));
             }
             catch (Exception ex)
             {
                 Log($"[Router] {toolName}: Exception: {ex.GetType().Name}: {ex.Message}");
                 var errorResult = McpToolResult.Error($"Tool execution failed: {ex.Message}");
-                return JsonRpcResponse.Success(request.Id, errorResult);
+                return JsonRpcResponse.Success(request.Id, WrapResult(JObject.FromObject(errorResult)));
             }
         }
     }
