@@ -8,11 +8,11 @@
 
 ## Features
 
-VS MCP Server exposes **113 tools** across the following categories:
+VS MCP Server exposes **115 tools** across the following categories:
 
 | Category | Tools | Description |
 |----------|------:|-------------|
-| General | 5 | Execute VS commands, get IDE status, view tool help, toggle focus guard |
+| General | 7 | Execute VS commands, get IDE status, view tool help, toggle focus guard, audit foreground transitions |
 | Solution & Project | 5 | Open/close solutions, list/inspect projects |
 | Build | 6 | Build solution/project, clean, rebuild, get build errors, switch configuration |
 | Editor | 7 | Open/close/read/write/edit files, find in files |
@@ -40,6 +40,8 @@ VS MCP Server exposes **113 tools** across the following categories:
 | `get_help` | Get a categorized list of all available vs-mcp tools with descriptions |
 | `focus_guard_get` | Get whether the focus guard is currently on |
 | `focus_guard_set` | Turn the focus guard on or off — when on, MCP-driven builds, output writes, and debug launches do not steal foreground focus from the currently focused application, and VS is kept minimized across `debug_start` if it was already minimized |
+| `focus_guard_audit_read` | Read recent foreground-window transitions from a bounded ring buffer — each entry names the process/window that gained (and lost) foreground, with timestamp and whether the guard was on. Use this to identify what actually stole focus. |
+| `focus_guard_audit_clear` | Clear the buffered foreground-transition events so a subsequent audit read starts from a clean slate |
 
 #### Solution
 
@@ -447,6 +449,16 @@ How it works under the hood, when the guard is on:
 The setting is off by default, so opt-in via `focus_guard_set` before an
 autonomous session and turn it off again when you want normal VS focus
 behavior back.
+
+### Observability
+
+When focus does slip through, you don't have to guess what took it. A
+background auditor (started automatically) records every foreground
+transition Windows fires — process name, window title, timestamp, and
+whether the guard was on. Call `focus_guard_audit_read` right after any
+perceived focus steal to see exactly which process / window pulled
+foreground and when, and `focus_guard_audit_clear` to reset the buffer
+before a new test scenario.
 
 ## Bundled Claude Code Skills
 

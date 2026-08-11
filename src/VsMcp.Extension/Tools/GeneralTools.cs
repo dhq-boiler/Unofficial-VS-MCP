@@ -22,6 +22,8 @@ namespace VsMcp.Extension.Tools
             { "get_help", "General" },
             { "focus_guard_get", "General" },
             { "focus_guard_set", "General" },
+            { "focus_guard_audit_read", "General" },
+            { "focus_guard_audit_clear", "General" },
             // Solution
             { "solution_open", "Solution" },
             { "solution_close", "Solution" },

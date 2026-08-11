@@ -18,6 +18,11 @@ namespace VsMcp.Extension.Tools
     {
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
+            // Start the foreground auditor once at registration time so that
+            // focus_guard_audit_read has data to return even from before the
+            // user turns the guard on.
+            FocusAuditor.EnsureStarted();
+
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_get",
@@ -33,6 +38,22 @@ namespace VsMcp.Extension.Tools
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),
                 args => SetAsync(accessor, args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "focus_guard_audit_read",
+                    "Read recent foreground-window transitions observed by the auditor (bounded ring buffer, ~500 events). Each entry records timestamp, the process/window that GAINED foreground, the process/window that LOST it, and whether the focus guard was on at that moment. Call this immediately after any perceived focus steal to identify which process/window (VS, debuggee, Error List, an MCP-driven tool call, or something else entirely) actually took foreground and when — no more guessing. Events are returned oldest first.",
+                    SchemaBuilder.Create()
+                        .AddInteger("limit", "Maximum number of events to return (default 100, capped at buffer size)")
+                        .Build()),
+                args => AuditReadAsync(args));
+
+            registry.Register(
+                new McpToolDefinition(
+                    "focus_guard_audit_clear",
+                    "Clear the buffered foreground-transition events so a subsequent focus_guard_audit_read starts from a clean slate. Useful right before running a test scenario. The lifetime totalObserved counter is preserved.",
+                    SchemaBuilder.Empty()),
+                args => AuditClearAsync());
         }
 
         private static Task<McpToolResult> GetAsync()
@@ -103,6 +124,55 @@ namespace VsMcp.Extension.Tools
                     ? "Focus guard is ON. Foreground lock engaged for this call, and a background monitor will keep VS minimized (once it is minimized) until the guard is turned off."
                     : "Focus guard is OFF. Default focus behavior restored; VS may auto-restore normally."
             });
+        }
+
+        private static Task<McpToolResult> AuditReadAsync(JObject args)
+        {
+            int limit = 100;
+            var limitToken = args?["limit"];
+            if (limitToken != null && limitToken.Type != JTokenType.Null)
+            {
+                try { limit = limitToken.Value<int>(); } catch { }
+            }
+            if (limit <= 0) limit = 100;
+
+            var (total, events) = FocusAuditor.ReadRecent(limit);
+
+            var payload = new object[events.Count];
+            for (int i = 0; i < events.Count; i++)
+            {
+                var e = events[i];
+                payload[i] = new
+                {
+                    timestamp = e.Timestamp.ToString("o"),
+                    hwnd = "0x" + e.HwndValue.ToString("X"),
+                    processId = e.ProcessId,
+                    processName = e.ProcessName,
+                    windowTitle = e.WindowTitle,
+                    prevHwnd = "0x" + e.PrevHwndValue.ToString("X"),
+                    prevProcessId = e.PrevProcessId,
+                    prevProcessName = e.PrevProcessName,
+                    prevWindowTitle = e.PrevWindowTitle,
+                    focusGuardWasOn = e.FocusGuardWasOn,
+                };
+            }
+
+            return Task.FromResult(McpToolResult.Success(new
+            {
+                totalObserved = total,
+                bufferMax = FocusAuditor.MaxEvents,
+                returnedCount = events.Count,
+                events = payload,
+            }));
+        }
+
+        private static Task<McpToolResult> AuditClearAsync()
+        {
+            FocusAuditor.Clear();
+            return Task.FromResult(McpToolResult.Success(new
+            {
+                message = "Focus audit buffer cleared."
+            }));
         }
     }
 }
