@@ -34,6 +34,15 @@ namespace VsMcp.Extension.Services
         // synchronously take tens of seconds.
         public static TimeSpan DefaultBuildLockDuration { get; set; } = TimeSpan.FromSeconds(30);
 
+        // debug_stop uses OnEnterDesignMode as an anchor; this is the tail added
+        // AFTER the anchor fires to absorb post-Design-mode UI teardown
+        // (Output pane flush, toolbar teardown, Solution Explorer restoration).
+        public static TimeSpan DebugStopTailDuration { get; set; } = TimeSpan.FromSeconds(3);
+
+        // Hard cap for waiting on OnEnterDesignMode. Guards against the debugger
+        // getting stuck (silent stop / DTE hang) and holding the fg lock forever.
+        public static TimeSpan DebugStopHardCapDuration { get; set; } = TimeSpan.FromSeconds(15);
+
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 

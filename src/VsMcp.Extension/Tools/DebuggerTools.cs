@@ -13,6 +13,12 @@ namespace VsMcp.Extension.Tools
 {
     public static class DebuggerTools
     {
+        // Root the DebuggerEvents COM event sink in a static field. Classic pitfall:
+        // if we don't hold this reference, GC collects the sink and OnEnterDesignMode
+        // never fires again. Primed lazily on first stop/restart via
+        // EnsureDebuggerEventsRooted().
+        private static EnvDTE.DebuggerEvents _debuggerEvents;
+
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
             registry.Register(
@@ -145,69 +151,88 @@ namespace VsMcp.Extension.Tools
             });
         }
 
+        private static void EnsureDebuggerEventsRooted(DTE2 dte)
+        {
+            if (_debuggerEvents != null) return;
+            try { _debuggerEvents = dte?.Events?.DebuggerEvents; } catch { }
+        }
+
+        /// <summary>
+        /// Stop the debugger and hold a scoped foreground lock over the entire
+        /// teardown lifetime: from Stop() call, through OnEnterDesignMode
+        /// (or a hard cap for silent/hang cases), plus a tail to absorb
+        /// post-Design-mode UI activation (Output pane flush, toolbar teardown,
+        /// Solution Explorer restoration) that would otherwise steal focus.
+        /// Assumes caller has verified the debugger is currently running.
+        /// </summary>
+        private static async Task StopDebuggerWithFgLockAsync(
+            VsServiceAccessor accessor, DTE2 dte, IntPtr vsHwnd)
+        {
+            using (FocusGuard.AcquireBuildLock(vsHwnd))
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                _dispDebuggerEvents_OnEnterDesignModeEventHandler handler =
+                    reason => tcs.TrySetResult(true);
+
+                // Subscribe BEFORE calling Stop so the event cannot be missed.
+                try { if (_debuggerEvents != null) _debuggerEvents.OnEnterDesignMode += handler; } catch { }
+                try
+                {
+                    await accessor.RunOnUIThreadAsync(() =>
+                    {
+                        dte.Debugger.Stop(false);
+                    });
+
+                    // Anchor: OnEnterDesignMode, with hard cap for silent/hang cases.
+                    await Task.WhenAny(tcs.Task, Task.Delay(FocusGuard.DebugStopHardCapDuration));
+
+                    // Tail: absorb Output pane flush / toolbar teardown /
+                    // Solution Explorer restoration that fires post-Design-mode.
+                    await Task.Delay(FocusGuard.DebugStopTailDuration);
+                }
+                finally
+                {
+                    try { if (_debuggerEvents != null) _debuggerEvents.OnEnterDesignMode -= handler; } catch { }
+                }
+            }
+        }
+
         private static async Task<McpToolResult> DebugStopAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
+            var (dte, vsHwnd, mode) = await accessor.RunOnUIThreadAsync(() =>
             {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                if (dte.Debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
-                    return McpToolResult.Error("Debugger is not running");
-
-                // Prevent VS from stealing foreground when it restores from a
-                // minimized state to run its stop-debugging UI transitions.
-                // No-op if the guard is off.
-                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForDebug(vsHwnd);
-                dte.Debugger.Stop(false);
-                return McpToolResult.Success("Debugging stopped");
+                EnsureDebuggerEventsRooted(d);
+                return (d, VsWindowHelper.TryGetMainWindowHandle(d), d.Debugger.CurrentMode);
             });
+
+            if (mode == dbgDebugMode.dbgDesignMode)
+                return McpToolResult.Error("Debugger is not running");
+
+            await StopDebuggerWithFgLockAsync(accessor, dte, vsHwnd);
+            return McpToolResult.Success("Debugging stopped");
         }
 
         private static async Task<McpToolResult> DebugRestartAsync(VsServiceAccessor accessor)
         {
-            // Step 1: Stop debugging
-            var isRunning = await accessor.RunOnUIThreadAsync(() =>
+            var (dte, vsHwnd, mode) = await accessor.RunOnUIThreadAsync(() =>
             {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                if (dte.Debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
-                    return false;
-
-                // Guard the stop half of restart too — otherwise VS can steal
-                // foreground here even though the subsequent start half is
-                // already protected.
-                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForDebug(vsHwnd);
-                dte.Debugger.Stop(false);
-                return true;
+                EnsureDebuggerEventsRooted(d);
+                return (d, VsWindowHelper.TryGetMainWindowHandle(d), d.Debugger.CurrentMode);
             });
 
-            if (!isRunning)
+            if (mode == dbgDebugMode.dbgDesignMode)
                 return McpToolResult.Error("Debugger is not running");
 
-            // Step 2: Wait for debugger to reach Design mode (up to 15 seconds)
-            for (int i = 0; i < 30; i++)
-            {
-                await Task.Delay(500);
-                var mode = await accessor.RunOnUIThreadAsync(() =>
-                {
-                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                        .Run(() => accessor.GetDteAsync());
-                    return dte.Debugger.CurrentMode;
-                });
-                if (mode == dbgDebugMode.dbgDesignMode)
-                    break;
-            }
+            // Step 1: Stop (scoped fg lock + event-anchored tail).
+            await StopDebuggerWithFgLockAsync(accessor, dte, vsHwnd);
 
-            // Step 3: Start debugging
+            // Step 2: Start debugging (existing debug_start guard).
             return await accessor.RunOnUIThreadAsync(() =>
             {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                    .Run(() => accessor.GetDteAsync());
-                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging restarted");

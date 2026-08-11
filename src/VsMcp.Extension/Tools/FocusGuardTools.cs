@@ -33,7 +33,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_set",
-                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild wrap the entire build call in a scoped foreground lock that snapshots the current foreground window at build start and actively restores it (20 ms polling) throughout the build — this defends against both foreign SetForegroundWindow calls (LSFW) and VS's own in-process main-window activation (which LSFW does not block), so a fullscreen game keeps foreground even while VS builds; (3) debug_start / debug_start_without_debugging / debug_restart / debug_stop briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so neither the launched debuggee nor Visual Studio's own start/stop UI transitions can steal focus from the currently focused application (e.g. a game running fullscreen); (4) a background monitor keeps VS minimized for the entire duration the guard is on — once VS is minimized (at set-time or any point later), it stays minimized until the guard is turned off, even if VS itself tries to auto-restore. When you turn the guard ON, the tool call itself also engages the foreground lock immediately so this very invocation cannot steal focus either. Off by default.",
+                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild wrap the entire build call in a scoped foreground lock that snapshots the current foreground window at build start and actively restores it (20 ms polling) throughout the build — this defends against both foreign SetForegroundWindow calls (LSFW) and VS's own in-process main-window activation (which LSFW does not block), so a fullscreen game keeps foreground even while VS builds; (3) debug_start / debug_start_without_debugging briefly lock foreground-window changes; (4) debug_stop and the stop half of debug_restart wrap the entire teardown in the same scoped foreground lock, anchored on DebuggerEvents.OnEnterDesignMode (with a 15 s hard cap for silent/hang cases) plus a 3 s tail to absorb post-Design-mode UI activation (Output pane flush, toolbar teardown, Solution Explorer restoration) that would otherwise steal focus; (5) a background monitor keeps VS minimized for the entire duration the guard is on — once VS is minimized (at set-time or any point later), it stays minimized until the guard is turned off, even if VS itself tries to auto-restore. When you turn the guard ON, the tool call itself also engages the foreground lock immediately so this very invocation cannot steal focus either. Off by default.",
                     SchemaBuilder.Create()
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),
@@ -62,7 +62,9 @@ namespace VsMcp.Extension.Tools
             {
                 enabled = FocusGuard.Enabled,
                 debugLockDurationMs = (int)FocusGuard.DefaultDebugLockDuration.TotalMilliseconds,
-                buildLockDurationMs = (int)FocusGuard.DefaultBuildLockDuration.TotalMilliseconds
+                buildLockDurationMs = (int)FocusGuard.DefaultBuildLockDuration.TotalMilliseconds,
+                debugStopTailMs = (int)FocusGuard.DebugStopTailDuration.TotalMilliseconds,
+                debugStopHardCapMs = (int)FocusGuard.DebugStopHardCapDuration.TotalMilliseconds
             }));
         }
 
