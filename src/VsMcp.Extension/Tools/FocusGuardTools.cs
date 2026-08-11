@@ -33,7 +33,7 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_set",
-                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild wrap the entire build call in a scoped foreground lock that snapshots the current foreground window at build start and actively restores it (20 ms polling) throughout the build — this defends against both foreign SetForegroundWindow calls (LSFW) and VS's own in-process main-window activation (which LSFW does not block), so a fullscreen game keeps foreground even while VS builds; (3) debug_start / debug_start_without_debugging briefly lock foreground-window changes; (4) debug_stop and the stop half of debug_restart wrap the entire teardown in the same scoped foreground lock, anchored on DebuggerEvents.OnEnterDesignMode (with a 15 s hard cap for silent/hang cases) plus a 3 s tail to absorb post-Design-mode UI activation (Output pane flush, toolbar teardown, Solution Explorer restoration) that would otherwise steal focus; (5) a background monitor keeps VS minimized for the entire duration the guard is on — once VS is minimized (at set-time or any point later), it stays minimized until the guard is turned off, even if VS itself tries to auto-restore. When you turn the guard ON, the tool call itself also engages the foreground lock immediately so this very invocation cannot steal focus either. Off by default.",
+                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild wrap the entire build call in a scoped foreground lock that snapshots the current foreground window at build start and actively restores it (20 ms polling) throughout the build — this defends against both foreign SetForegroundWindow calls (LSFW) and VS's own in-process main-window activation (which LSFW does not block), so a fullscreen game keeps foreground even while VS builds; (3) debug_start / debug_start_without_debugging and the start half of debug_restart wrap the launch in the same scoped foreground lock, using a 3-phase window-anchored tail — Phase 1 waits for OnEnterRunMode (10 s cap), Phase 2 polls EnumWindows for the first visible top-level window owned by any debuggee process (20 s cap, covers cold-start WPF apps that take 4-8 s to appear), Phase 3 adds a 1.5 s tail for WPF's second-wave activation (splash-to-main swap, first render); (4) debug_stop and the stop half of debug_restart wrap the entire teardown in the same scoped foreground lock, anchored on DebuggerEvents.OnEnterDesignMode (with a 15 s hard cap for silent/hang cases) plus a 3 s tail to absorb post-Design-mode UI activation (Output pane flush, toolbar teardown, Solution Explorer restoration); (5) a background monitor keeps VS minimized for the entire duration the guard is on — once VS is minimized (at set-time or any point later), it stays minimized until the guard is turned off, even if VS itself tries to auto-restore. When you turn the guard ON, the tool call itself also engages the foreground lock immediately so this very invocation cannot steal focus either. Off by default.",
                     SchemaBuilder.Create()
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),
@@ -61,10 +61,16 @@ namespace VsMcp.Extension.Tools
             return Task.FromResult(McpToolResult.Success(new
             {
                 enabled = FocusGuard.Enabled,
+                // debugLockDurationMs is deprecated — debug_start/restart now use the
+                // 3-phase window-anchored lock (launchWait + windowWait + tail).
+                // Preserved for backward compatibility.
                 debugLockDurationMs = (int)FocusGuard.DefaultDebugLockDuration.TotalMilliseconds,
                 buildLockDurationMs = (int)FocusGuard.DefaultBuildLockDuration.TotalMilliseconds,
                 debugStopTailMs = (int)FocusGuard.DebugStopTailDuration.TotalMilliseconds,
-                debugStopHardCapMs = (int)FocusGuard.DebugStopHardCapDuration.TotalMilliseconds
+                debugStopHardCapMs = (int)FocusGuard.DebugStopHardCapDuration.TotalMilliseconds,
+                debugStartLaunchWaitMs = (int)FocusGuard.DebugStartLaunchWaitDuration.TotalMilliseconds,
+                debugStartWindowWaitMs = (int)FocusGuard.DebugStartWindowWaitDuration.TotalMilliseconds,
+                debugStartTailMs = (int)FocusGuard.DebugStartTailDuration.TotalMilliseconds
             }));
         }
 

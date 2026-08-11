@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
@@ -18,6 +19,25 @@ namespace VsMcp.Extension.Tools
         // never fires again. Primed lazily on first stop/restart via
         // EnsureDebuggerEventsRooted().
         private static EnvDTE.DebuggerEvents _debuggerEvents;
+
+        // Win32 imports for the debug_start visible-window anchor (Phase 2).
+        private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        private const uint GW_OWNER = 4;
 
         public static void Register(McpToolRegistry registry, VsServiceAccessor accessor)
         {
@@ -120,35 +140,162 @@ namespace VsMcp.Extension.Tools
                 args => DebugEvaluateAsync(accessor, args));
         }
 
+        private static HashSet<uint> GetDebuggedProcessIds(DTE2 dte)
+        {
+            var set = new HashSet<uint>();
+            try
+            {
+                foreach (EnvDTE.Process p in dte.Debugger.DebuggedProcesses)
+                {
+                    try { set.Add((uint)p.ProcessID); } catch { }
+                }
+            }
+            catch { }
+            return set;
+        }
+
+        private static bool AllExited(HashSet<uint> pids)
+        {
+            if (pids == null || pids.Count == 0) return false;
+            foreach (var pid in pids)
+            {
+                try
+                {
+                    using (var p = System.Diagnostics.Process.GetProcessById((int)pid))
+                    {
+                        if (!p.HasExited) return false;
+                    }
+                }
+                catch
+                {
+                    // Process not found — treat as exited.
+                }
+            }
+            return true;
+        }
+
+        private static bool AnyVisibleTopLevelWindow(HashSet<uint> pids)
+        {
+            if (pids == null || pids.Count == 0) return false;
+            var found = false;
+            EnumWindows((hwnd, _) =>
+            {
+                try
+                {
+                    GetWindowThreadProcessId(hwnd, out uint pid);
+                    if (pids.Contains(pid) && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == IntPtr.Zero)
+                    {
+                        found = true;
+                        return false; // stop enum
+                    }
+                }
+                catch { }
+                return true;
+            }, IntPtr.Zero);
+            return found;
+        }
+
+        /// <summary>
+        /// Launch the debugger via the given UI-thread action and hold a scoped
+        /// foreground lock through the entire launch lifetime:
+        ///   Phase 1: fire the launch, then wait for OnEnterRunMode with a cap
+        ///            (short tail + release on cancel / non-debuggable target).
+        ///   Phase 2: EnumWindows-poll for the first visible top-level window
+        ///            owned by any debuggee process, up to the window-wait cap.
+        ///            Covers cold-start WPF apps that can take 4-8 s to appear.
+        ///   Phase 3: tail to absorb WPF's second-wave activation (~700 ms after
+        ///            initial WM_ACTIVATEAPP — splash-to-main swap, first render).
+        /// </summary>
+        private static async Task StartDebuggerWithFgLockAsync(
+            VsServiceAccessor accessor, DTE2 dte, IntPtr vsHwnd,
+            Action<DTE2> launchAction)
+        {
+            using (FocusGuard.AcquireBuildLock(vsHwnd))
+            {
+                var runTcs = new TaskCompletionSource<bool>();
+                var designTcs = new TaskCompletionSource<bool>();
+                _dispDebuggerEvents_OnEnterRunModeEventHandler runHandler =
+                    reason => runTcs.TrySetResult(true);
+                _dispDebuggerEvents_OnEnterDesignModeEventHandler designHandler =
+                    reason => designTcs.TrySetResult(true);
+
+                // Subscribe BEFORE firing the launch so the event cannot be missed.
+                try { if (_debuggerEvents != null) _debuggerEvents.OnEnterRunMode += runHandler; } catch { }
+                try { if (_debuggerEvents != null) _debuggerEvents.OnEnterDesignMode += designHandler; } catch { }
+
+                try
+                {
+                    await accessor.RunOnUIThreadAsync(() => launchAction(dte));
+
+                    // Phase 1: wait for RunMode entry.
+                    var phase1 = await Task.WhenAny(
+                        runTcs.Task,
+                        designTcs.Task,
+                        Task.Delay(FocusGuard.DebugStartLaunchWaitDuration));
+                    if (phase1 != runTcs.Task)
+                    {
+                        // Launch failed / user cancelled / non-debuggable target
+                        // (e.g. Debug.StartWithoutDebugging does not fire debugger
+                        // events at all). Short tail then release.
+                        await Task.Delay(1000);
+                        return;
+                    }
+
+                    // Phase 2: EnumWindows-poll for the first visible top-level
+                    // window owned by any debuggee process.
+                    var pids = await accessor.RunOnUIThreadAsync(() => GetDebuggedProcessIds(dte));
+                    var deadline = DateTime.UtcNow + FocusGuard.DebugStartWindowWaitDuration;
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        if (designTcs.Task.IsCompleted) break;      // user cancel / crash
+                        if (AllExited(pids)) break;                 // console immediate exit
+                        if (AnyVisibleTopLevelWindow(pids)) break;  // anchor
+                        try { await Task.Delay(200); } catch { break; }
+                    }
+
+                    // Phase 3: tail for WPF second-wave activation.
+                    await Task.Delay(FocusGuard.DebugStartTailDuration);
+                }
+                finally
+                {
+                    try { if (_debuggerEvents != null) _debuggerEvents.OnEnterRunMode -= runHandler; } catch { }
+                    try { if (_debuggerEvents != null) _debuggerEvents.OnEnterDesignMode -= designHandler; } catch { }
+                }
+            }
+        }
+
         private static async Task<McpToolResult> DebugStartAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
+            var (dte, vsHwnd) = await accessor.RunOnUIThreadAsync(() =>
             {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                // Prevent the process launched by the debugger from stealing foreground
-                // focus, and keep VS minimized if it already was. No-op when the guard
-                // is off.
-                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForDebug(vsHwnd);
-                dte.Solution.SolutionBuild.Debug();
-                return McpToolResult.Success("Debugging started");
+                EnsureDebuggerEventsRooted(d);
+                return (d, VsWindowHelper.TryGetMainWindowHandle(d));
             });
+
+            await StartDebuggerWithFgLockAsync(accessor, dte, vsHwnd,
+                d => d.Solution.SolutionBuild.Debug());
+            return McpToolResult.Success("Debugging started");
         }
 
         private static async Task<McpToolResult> DebugStartWithoutDebuggingAsync(VsServiceAccessor accessor)
         {
-            return await accessor.RunOnUIThreadAsync(() =>
+            var (dte, vsHwnd) = await accessor.RunOnUIThreadAsync(() =>
             {
-                var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                var d = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-
-                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForDebug(vsHwnd);
-                dte.ExecuteCommand("Debug.StartWithoutDebugging");
-                return McpToolResult.Success("Started without debugging");
+                EnsureDebuggerEventsRooted(d);
+                return (d, VsWindowHelper.TryGetMainWindowHandle(d));
             });
+
+            // Debug.StartWithoutDebugging does not attach the debugger, so debugger
+            // events won't fire. Phase 1 will hit the launch-wait cap and take the
+            // short-tail return path, giving a total lock ~= launch cap + 1 s tail
+            // — enough to cover most non-debugger cold starts without blocking.
+            await StartDebuggerWithFgLockAsync(accessor, dte, vsHwnd,
+                d => d.ExecuteCommand("Debug.StartWithoutDebugging"));
+            return McpToolResult.Success("Started without debugging");
         }
 
         private static void EnsureDebuggerEventsRooted(DTE2 dte)
@@ -230,13 +377,10 @@ namespace VsMcp.Extension.Tools
             // Step 1: Stop (scoped fg lock + event-anchored tail).
             await StopDebuggerWithFgLockAsync(accessor, dte, vsHwnd);
 
-            // Step 2: Start debugging (existing debug_start guard).
-            return await accessor.RunOnUIThreadAsync(() =>
-            {
-                FocusGuard.PreserveForegroundForDebug(vsHwnd);
-                dte.Solution.SolutionBuild.Debug();
-                return McpToolResult.Success("Debugging restarted");
-            });
+            // Step 2: Start (scoped fg lock + 3-phase window-anchored tail).
+            await StartDebuggerWithFgLockAsync(accessor, dte, vsHwnd,
+                d => d.Solution.SolutionBuild.Debug());
+            return McpToolResult.Success("Debugging restarted");
         }
 
         private static async Task<McpToolResult> DebugAttachAsync(VsServiceAccessor accessor, JObject args)

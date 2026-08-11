@@ -43,6 +43,21 @@ namespace VsMcp.Extension.Services
         // getting stuck (silent stop / DTE hang) and holding the fg lock forever.
         public static TimeSpan DebugStopHardCapDuration { get; set; } = TimeSpan.FromSeconds(15);
 
+        // debug_start Phase 1: cap for OnEnterRunMode entry after Debug/Go. If we
+        // don't see the run event within this window, treat the launch as failed
+        // / cancelled and release the lock after a short tail.
+        public static TimeSpan DebugStartLaunchWaitDuration { get; set; } = TimeSpan.FromSeconds(10);
+
+        // debug_start Phase 2: cap for polling until any debuggee process shows
+        // a visible top-level window. Covers cold-start WPF apps that take 4-8 s
+        // to render their first HWND after Framework init + JIT + MEF + splash.
+        public static TimeSpan DebugStartWindowWaitDuration { get; set; } = TimeSpan.FromSeconds(20);
+
+        // debug_start Phase 3: tail after the first visible window appears.
+        // Absorbs WPF's second-wave activation (~700 ms after initial WM_ACTIVATEAPP,
+        // typically the splash-to-main swap or first-render activation).
+        public static TimeSpan DebugStartTailDuration { get; set; } = TimeSpan.FromMilliseconds(1500);
+
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
