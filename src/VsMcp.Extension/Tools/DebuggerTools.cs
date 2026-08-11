@@ -114,6 +114,26 @@ namespace VsMcp.Extension.Tools
                 args => DebugEvaluateAsync(accessor, args));
         }
 
+        private static IntPtr TryGetVsMainWindowHandle(DTE2 dte)
+        {
+            try
+            {
+                var mainWindow = dte?.MainWindow;
+                if (mainWindow == null) return IntPtr.Zero;
+                // DTE.Window.HWnd was long in older SDKs and is IntPtr? in newer ones.
+                // Round-trip through Convert to accept either shape via runtime binding.
+                object raw = mainWindow.HWnd;
+                if (raw == null) return IntPtr.Zero;
+                if (raw is IntPtr ip) return ip;
+                long asLong = Convert.ToInt64(raw);
+                return asLong == 0 ? IntPtr.Zero : new IntPtr(asLong);
+            }
+            catch
+            {
+                return IntPtr.Zero;
+            }
+        }
+
         private static async Task<McpToolResult> DebugStartAsync(VsServiceAccessor accessor)
         {
             return await accessor.RunOnUIThreadAsync(() =>
@@ -122,8 +142,10 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 // Prevent the process launched by the debugger from stealing foreground
-                // focus. When focus guard is off, this is a no-op.
-                FocusGuard.PreserveForegroundForDebug();
+                // focus, and keep VS minimized if it already was. No-op when the guard
+                // is off.
+                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging started");
             });
@@ -136,7 +158,8 @@ namespace VsMcp.Extension.Tools
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
-                FocusGuard.PreserveForegroundForDebug();
+                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.ExecuteCommand("Debug.StartWithoutDebugging");
                 return McpToolResult.Success("Started without debugging");
             });
@@ -194,7 +217,8 @@ namespace VsMcp.Extension.Tools
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-                FocusGuard.PreserveForegroundForDebug();
+                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging restarted");
             });

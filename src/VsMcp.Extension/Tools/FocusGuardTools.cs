@@ -21,14 +21,14 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_get",
-                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes and debug starts avoid stealing foreground focus from the currently focused application.",
+                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes and debug starts avoid stealing foreground focus from the currently focused application, and Visual Studio is kept minimized across debug_start if it was already minimized when the call was issued.",
                     SchemaBuilder.Empty()),
                 args => GetAsync());
 
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_set",
-                    "Turn the focus guard on or off. When on, MCP-driven builds and output writes skip pane.Activate() calls, and debug_start / debug_start_without_debugging / debug_restart briefly lock foreground-window changes so the launched debuggee does not steal focus from the currently focused application (e.g. a game running fullscreen). Off by default.",
+                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) debug_start / debug_start_without_debugging / debug_restart briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so the launched debuggee cannot steal focus from the currently focused application (e.g. a game running fullscreen); (3) if Visual Studio was minimized at the moment debug_start* was invoked, it is re-minimized whenever it tries to auto-restore during the lock window, so the user's foreground app is never visually interrupted. Off by default.",
                     SchemaBuilder.Create()
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),
