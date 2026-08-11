@@ -411,17 +411,25 @@ build → debug → UI verification cycle in Visual Studio on one monitor
 while the developer keeps a fullscreen application (e.g. a game) running
 on another — no focus theft, no window flicker, no context switch.
 
+Paired with **[jidodebugger](https://jidodebugger.dhq-boiler.dev/)**
+(a companion MCP server that injects a WPF bridge into the debuggee and
+exposes `wpf_bridge_inject` / `wpf_invoke_command` / `wpf_wait_for` for
+direct ViewModel-level drive-and-assert), the loop becomes: vs-mcp
+launches the debuggee under the focus guard, jidodebugger drives its
+UI over the same MCP session, and neither side has to touch the
+foreground.
+
 Recorded end-to-end run against a WPF debuggee (6 tool calls, zero
 human interventions, zero foreground steals):
 
 | # | Tool | Result | What the guard did |
 |---|------|--------|--------------------|
 | 1 | `debug_start` (vs-mcp) | Debugging started | VS restore *and* debuggee launch both stayed background — the user's foreground app was never activated |
-| 2 | `wpf_bridge_inject` (external UI bridge) | payload attached | — |
-| 3 | `wpf_invoke_command` LoadCommand | fired=true, awaitedAsync=true | — |
-| 4 | `wpf_wait_for` viewModel appears | matchCount=5 (~3.9 s) | — |
-| 5 | `wpf_invoke_command` OpenMemberByKeyCommand | fired=true, awaitedAsync=true | — |
-| 6 | `wpf_wait_for` propertyNotNull | matched | — |
+| 2 | `wpf_bridge_inject` (jidodebugger) | payload attached | — |
+| 3 | `wpf_invoke_command` LoadCommand (jidodebugger) | fired=true, awaitedAsync=true | — |
+| 4 | `wpf_wait_for` viewModel appears (jidodebugger) | matchCount=5 (~3.9 s) | — |
+| 5 | `wpf_invoke_command` OpenMemberByKeyCommand (jidodebugger) | fired=true, awaitedAsync=true | — |
+| 6 | `wpf_wait_for` propertyNotNull (jidodebugger) | matched | — |
 
 How it works under the hood, when the guard is on:
 
