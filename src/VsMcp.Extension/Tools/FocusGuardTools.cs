@@ -21,18 +21,18 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_get",
-                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes, debug lifecycle transitions (start / start_without_debugging / restart / stop), and build lifecycle (build_solution / build_project / clean / rebuild) all avoid stealing foreground focus from the currently focused application, and Visual Studio is kept minimized across those transitions if it was already minimized when the call was issued.",
+                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes, debug lifecycle transitions (start / start_without_debugging / restart / stop), and build lifecycle (build_solution / build_project / clean / rebuild) all avoid stealing foreground focus from the currently focused application, and a background monitor keeps VS minimized (once minimized) for the entire duration the guard is on.",
                     SchemaBuilder.Empty()),
                 args => GetAsync());
 
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_set",
-                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild raise a longer foreground lock covering the whole build so VS cannot auto-activate the Error List pane when compilation fails; (3) debug_start / debug_start_without_debugging / debug_restart / debug_stop briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so neither the launched debuggee nor Visual Studio's own start/stop UI transitions can steal focus from the currently focused application (e.g. a game running fullscreen); (4) if Visual Studio was minimized at the moment any of those debug_* / build_* commands was invoked, it is re-minimized whenever it tries to auto-restore during the lock window, so the user's foreground app is never visually interrupted. Off by default.",
+                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) build_solution / build_project / clean / rebuild raise a longer foreground lock covering the whole build so VS cannot auto-activate the Error List pane when compilation fails; (3) debug_start / debug_start_without_debugging / debug_restart / debug_stop briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so neither the launched debuggee nor Visual Studio's own start/stop UI transitions can steal focus from the currently focused application (e.g. a game running fullscreen); (4) a background monitor keeps VS minimized for the entire duration the guard is on — once VS is minimized (at set-time or any point later), it stays minimized until the guard is turned off, even if VS itself tries to auto-restore. When you turn the guard ON, the tool call itself also engages the foreground lock immediately so this very invocation cannot steal focus either. Off by default.",
                     SchemaBuilder.Create()
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),
-                args => SetAsync(args));
+                args => SetAsync(accessor, args));
         }
 
         private static Task<McpToolResult> GetAsync()
@@ -40,15 +40,16 @@ namespace VsMcp.Extension.Tools
             return Task.FromResult(McpToolResult.Success(new
             {
                 enabled = FocusGuard.Enabled,
-                debugLockDurationMs = (int)FocusGuard.DefaultDebugLockDuration.TotalMilliseconds
+                debugLockDurationMs = (int)FocusGuard.DefaultDebugLockDuration.TotalMilliseconds,
+                buildLockDurationMs = (int)FocusGuard.DefaultBuildLockDuration.TotalMilliseconds
             }));
         }
 
-        private static Task<McpToolResult> SetAsync(JObject args)
+        private static async Task<McpToolResult> SetAsync(VsServiceAccessor accessor, JObject args)
         {
             var enabledToken = args?["enabled"];
             if (enabledToken == null || enabledToken.Type == JTokenType.Null)
-                return Task.FromResult(McpToolResult.Error("Parameter 'enabled' is required"));
+                return McpToolResult.Error("Parameter 'enabled' is required");
 
             bool enabled;
             try
@@ -57,17 +58,51 @@ namespace VsMcp.Extension.Tools
             }
             catch
             {
-                return Task.FromResult(McpToolResult.Error("Parameter 'enabled' must be a boolean"));
+                return McpToolResult.Error("Parameter 'enabled' must be a boolean");
             }
 
             FocusGuard.Enabled = enabled;
-            return Task.FromResult(McpToolResult.Success(new
+
+            // When turning the guard on, engage the foreground lock right here so
+            // that this very tool call (and any VS-side pane activation triggered
+            // by MCP request processing) cannot steal focus from the user's
+            // currently focused application. Also start the background monitor
+            // that keeps VS from auto-restoring out of its minimized state for
+            // as long as the guard remains on. The Enabled flag must be set
+            // FIRST, otherwise PreserveForegroundForDebug short-circuits.
+            if (enabled)
+            {
+                try
+                {
+                    var vsHwnd = await accessor.RunOnUIThreadAsync(() =>
+                    {
+                        var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                            .Run(() => accessor.GetDteAsync());
+                        return VsWindowHelper.TryGetMainWindowHandle(dte);
+                    });
+                    FocusGuard.PreserveForegroundForDebug(vsHwnd);
+                    FocusGuard.StartMinimizeMonitor(vsHwnd);
+                }
+                catch
+                {
+                    // Fall back to a HWND-less lock if the DTE hop fails — still
+                    // engages LSFW_LOCK + SPI_SETFOREGROUNDLOCKTIMEOUT (but the
+                    // long-running minimize monitor cannot start without an HWND).
+                    FocusGuard.PreserveForegroundForDebug();
+                }
+            }
+            else
+            {
+                FocusGuard.StopMinimizeMonitor();
+            }
+
+            return McpToolResult.Success(new
             {
                 enabled = FocusGuard.Enabled,
                 message = enabled
-                    ? "Focus guard is ON. VS Output/Build panes will not be activated, and debug-launched processes will not steal foreground focus for a few seconds after launch."
-                    : "Focus guard is OFF. Default focus behavior restored."
-            }));
+                    ? "Focus guard is ON. Foreground lock engaged for this call, and a background monitor will keep VS minimized (once it is minimized) until the guard is turned off."
+                    : "Focus guard is OFF. Default focus behavior restored; VS may auto-restore normally."
+            });
         }
     }
 }

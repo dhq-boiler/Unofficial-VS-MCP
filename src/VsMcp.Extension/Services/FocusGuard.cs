@@ -16,6 +16,7 @@ namespace VsMcp.Extension.Services
     public static class FocusGuard
     {
         private static int _enabled;
+        private static CancellationTokenSource _minimizeMonitorCts;
 
         public static bool Enabled
         {
@@ -217,6 +218,63 @@ namespace VsMcp.Extension.Services
             });
 
             return NoOpScope.Instance;
+        }
+
+        /// <summary>
+        /// Start a background monitor that keeps VS from auto-restoring out of a
+        /// minimized state while the guard is on. Once VS is minimized (either
+        /// at monitor start or later during the session), any subsequent
+        /// non-minimized transition is immediately reverted with
+        /// SW_SHOWMINNOACTIVE. Idempotent — starting again first stops any
+        /// existing monitor.
+        /// </summary>
+        public static void StartMinimizeMonitor(IntPtr vsMainHwnd)
+        {
+            StopMinimizeMonitor();
+            if (vsMainHwnd == IntPtr.Zero) return;
+
+            var cts = new CancellationTokenSource();
+            Interlocked.Exchange(ref _minimizeMonitorCts, cts);
+
+            _ = Task.Run(async () =>
+            {
+                bool wasMinimized;
+                try { wasMinimized = IsIconic(vsMainHwnd); } catch { wasMinimized = false; }
+
+                while (!cts.Token.IsCancellationRequested && Enabled)
+                {
+                    try
+                    {
+                        bool nowMinimized = IsIconic(vsMainHwnd);
+                        if (wasMinimized && !nowMinimized)
+                        {
+                            // VS tried to restore itself — push it back to minimized.
+                            ShowWindow(vsMainHwnd, SW_SHOWMINNOACTIVE);
+                        }
+                        else if (!wasMinimized && nowMinimized)
+                        {
+                            // Fresh minimize (e.g. the user minimized VS mid-session).
+                            // Latch on so subsequent restores are also reverted.
+                            wasMinimized = true;
+                        }
+                    }
+                    catch { }
+
+                    try { await Task.Delay(50, cts.Token).ConfigureAwait(false); }
+                    catch { break; }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Stop the background minimize monitor if one is running. Idempotent.
+        /// </summary>
+        public static void StopMinimizeMonitor()
+        {
+            var cts = Interlocked.Exchange(ref _minimizeMonitorCts, null);
+            if (cts == null) return;
+            try { cts.Cancel(); } catch { }
+            try { cts.Dispose(); } catch { }
         }
 
         private static void RestoreForeground(IntPtr hwnd)
