@@ -124,6 +124,133 @@ namespace VsMcp.Extension.Services
             return PreserveForeground(DefaultBuildLockDuration, vsMainHwnd);
         }
 
+        /// <summary>
+        /// Acquire a foreground lock whose lifetime is bound to a using-scope. Snapshots
+        /// the current foreground window and, for as long as the returned IDisposable
+        /// is not disposed, runs an active 20 ms polling monitor that immediately
+        /// restores the snapshotted foreground whenever it changes. Combined with
+        /// LockSetForegroundWindow + SPI_SETFOREGROUNDLOCKTIMEOUT, this defends
+        /// against BOTH foreign SetForegroundWindow calls (LSFW) and VS's own
+        /// in-process activation attempts (which LSFW does not block — the polling
+        /// monitor catches those).
+        ///
+        /// Intended for wrapping SolutionBuild2.Build(true) etc., where the build
+        /// call synchronously blocks the UI thread for an unpredictable duration.
+        /// Off-switch: returns a no-op scope if the guard is disabled.
+        /// </summary>
+        public static IDisposable AcquireBuildLock(IntPtr vsMainHwnd)
+        {
+            if (!Enabled) return NoOpScope.Instance;
+            return new BuildLockScope(vsMainHwnd);
+        }
+
+        private sealed class BuildLockScope : IDisposable
+        {
+            private readonly IntPtr _savedFg;
+            private readonly IntPtr _vsMainHwnd;
+            private readonly bool _startedMinimized;
+            private readonly CancellationTokenSource _cts;
+            private readonly Task _monitorTask;
+            private readonly uint _originalTimeout;
+            private readonly bool _timeoutSaved;
+            private int _disposed;
+
+            public BuildLockScope(IntPtr vsMainHwnd)
+            {
+                _vsMainHwnd = vsMainHwnd;
+                try { _savedFg = GetForegroundWindow(); } catch { _savedFg = IntPtr.Zero; }
+                try { _startedMinimized = vsMainHwnd != IntPtr.Zero && IsIconic(vsMainHwnd); } catch { }
+
+                // Extend the foreground-lock timeout so foreign SetForegroundWindow
+                // calls (launched processes, msbuild task hosts, etc.) get demoted
+                // to a taskbar flash rather than pulling foreground.
+                try
+                {
+                    if (SystemParametersInfoGet(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, ref _originalTimeout, 0))
+                    {
+                        _timeoutSaved = true;
+                        SystemParametersInfoSet(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, (IntPtr)60000, SPIF_SENDCHANGE);
+                    }
+                }
+                catch { }
+
+                try { LockSetForegroundWindow(LSFW_LOCK); } catch { }
+
+                _cts = new CancellationTokenSource();
+                var savedFg = _savedFg;
+                var vsHwnd = _vsMainHwnd;
+                var startedMin = _startedMinimized;
+                _monitorTask = Task.Run(async () =>
+                {
+                    while (!_cts.Token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var current = GetForegroundWindow();
+                            if (savedFg != IntPtr.Zero && current != savedFg)
+                            {
+                                // Foreground drifted away (typically VS activating its
+                                // own main window in-process). Yank it back.
+                                RestoreForeground(savedFg);
+                            }
+
+                            // If VS was minimized at scope-entry, keep it that way.
+                            if (startedMin && vsHwnd != IntPtr.Zero)
+                            {
+                                try
+                                {
+                                    if (!IsIconic(vsHwnd))
+                                        ShowWindow(vsHwnd, SW_SHOWMINNOACTIVE);
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+
+                        try { await Task.Delay(20, _cts.Token).ConfigureAwait(false); }
+                        catch { break; }
+                    }
+                });
+            }
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+                try { _cts.Cancel(); } catch { }
+                try { _monitorTask?.Wait(TimeSpan.FromMilliseconds(300)); } catch { }
+                try { _cts.Dispose(); } catch { }
+
+                try { LockSetForegroundWindow(LSFW_UNLOCK); } catch { }
+
+                if (_timeoutSaved)
+                {
+                    try
+                    {
+                        SystemParametersInfoSet(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, (IntPtr)_originalTimeout, SPIF_SENDCHANGE);
+                    }
+                    catch { }
+                }
+
+                // One final restore in case a late VS activation slipped between
+                // the last poll tick and Dispose.
+                if (_savedFg != IntPtr.Zero)
+                {
+                    try { RestoreForeground(_savedFg); } catch { }
+                }
+
+                if (_startedMinimized && _vsMainHwnd != IntPtr.Zero)
+                {
+                    try
+                    {
+                        if (!IsIconic(_vsMainHwnd))
+                            ShowWindow(_vsMainHwnd, SW_SHOWMINNOACTIVE);
+                    }
+                    catch { }
+                }
+            }
+        }
+
         public static IDisposable PreserveForeground(TimeSpan lockDuration)
         {
             return PreserveForeground(lockDuration, IntPtr.Zero);

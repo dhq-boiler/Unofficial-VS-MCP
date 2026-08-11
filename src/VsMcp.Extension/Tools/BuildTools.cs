@@ -157,13 +157,18 @@ namespace VsMcp.Extension.Tools
                 }
                 catch { }
 
-                // Block VS from auto-activating the Error List (and stealing focus)
-                // when the build finishes with compile errors. No-op when guard is off.
+                // Actively hold the current foreground for the entire duration of
+                // the build. Guards against both foreign SetForegroundWindow calls
+                // (LSFW) and VS's own in-process main-window activation, which LSFW
+                // does not block. No-op when the guard is off.
                 var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForBuild(vsHwnd);
-                sb.Build(true);
+                bool succeeded;
+                using (FocusGuard.AcquireBuildLock(vsHwnd))
+                {
+                    sb.Build(true);
+                    succeeded = sb.LastBuildInfo == 0;
+                }
 
-                var succeeded = sb.LastBuildInfo == 0;
                 return McpToolResult.Success(new
                 {
                     success = succeeded,
@@ -254,87 +259,98 @@ namespace VsMcp.Extension.Tools
             // "ninja: no work to do" produces output that matches the previous baseline.
             var marker = $"[VsMcp:{Guid.NewGuid():N}]";
 
+            IDisposable buildLock = null;
             try
             {
-                await accessor.RunOnUIThreadAsync(() =>
+                try
                 {
-                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                        .Run(() => accessor.GetDteAsync());
-                    WriteToBuildPane(dte, marker + "\n");
-                    var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                    FocusGuard.PreserveForegroundForBuild(vsHwnd);
-                    dte.ExecuteCommand(commandName);
-                });
-            }
-            catch (Exception ex)
-            {
-                return McpToolResult.Error($"{actionName} command '{commandName}' failed to dispatch: {ex.Message}");
-            }
-
-            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(30);
-            while (true)
-            {
-                var fullText = await accessor.RunOnUIThreadAsync(() =>
-                {
-                    var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
-                        .Run(() => accessor.GetDteAsync());
-                    return ReadBuildPaneText(dte);
-                });
-
-                string newText;
-                var markerIdx = fullText.LastIndexOf(marker, StringComparison.Ordinal);
-                if (markerIdx >= 0)
-                {
-                    // Marker still in pane — new content is everything after it
-                    newText = fullText.Substring(markerIdx + marker.Length);
-                }
-                else
-                {
-                    // Marker is gone — VS cleared the pane; treat everything as new
-                    newText = fullText;
-                }
-
-                // Try sln-mode pattern first (richer info: per-project counts)
-                var slnMatch = BuildDoneSlnRegex.Match(newText);
-                if (slnMatch.Success)
-                {
-                    int succeededCount = ParseInt(slnMatch.Groups["ok_en"].Value) + ParseInt(slnMatch.Groups["ok_jp"].Value);
-                    int failedCount = ParseInt(slnMatch.Groups["ng_en"].Value) + ParseInt(slnMatch.Groups["ng_jp"].Value);
-                    var ok = failedCount == 0;
-                    return McpToolResult.Success(new
+                    await accessor.RunOnUIThreadAsync(() =>
                     {
-                        success = ok,
-                        succeededProjects = succeededCount,
-                        failedProjects = failedCount,
-                        message = ok
-                            ? $"{actionName} succeeded ({succeededCount} succeeded, {failedCount} failed)"
-                            : $"{actionName} failed ({succeededCount} succeeded, {failedCount} failed)"
+                        var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                            .Run(() => accessor.GetDteAsync());
+                        WriteToBuildPane(dte, marker + "\n");
+                        var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                        // Hold the lock for the entire polling loop below, not just
+                        // for the dispatch, because CMake builds run asynchronously
+                        // and VS may activate itself at any point during compilation.
+                        buildLock = FocusGuard.AcquireBuildLock(vsHwnd);
+                        dte.ExecuteCommand(commandName);
                     });
                 }
-
-                // Fall back to CMake folder-mode pattern (single succeeded/failed line)
-                var folderMatch = BuildDoneFolderRegex.Match(newText);
-                if (folderMatch.Success)
+                catch (Exception ex)
                 {
-                    var resultJp = folderMatch.Groups["result_jp"].Value;
-                    var resultEn = folderMatch.Groups["result_en"].Value;
-                    var ok = resultJp == "成功"
-                        || string.Equals(resultEn, "succeeded", StringComparison.OrdinalIgnoreCase);
-                    return McpToolResult.Success(new
-                    {
-                        success = ok,
-                        succeededProjects = ok ? 1 : 0,
-                        failedProjects = ok ? 0 : 1,
-                        message = ok
-                            ? $"{actionName} succeeded (CMake folder mode)"
-                            : $"{actionName} failed (CMake folder mode)"
-                    });
+                    return McpToolResult.Error($"{actionName} command '{commandName}' failed to dispatch: {ex.Message}");
                 }
 
-                if (DateTime.UtcNow > deadline)
-                    return McpToolResult.Error($"{actionName} timed out after 30 minutes (no completion marker in Build output pane)");
+                var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(30);
+                while (true)
+                {
+                    var fullText = await accessor.RunOnUIThreadAsync(() =>
+                    {
+                        var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
+                            .Run(() => accessor.GetDteAsync());
+                        return ReadBuildPaneText(dte);
+                    });
 
-                await Task.Delay(500);
+                    string newText;
+                    var markerIdx = fullText.LastIndexOf(marker, StringComparison.Ordinal);
+                    if (markerIdx >= 0)
+                    {
+                        // Marker still in pane — new content is everything after it
+                        newText = fullText.Substring(markerIdx + marker.Length);
+                    }
+                    else
+                    {
+                        // Marker is gone — VS cleared the pane; treat everything as new
+                        newText = fullText;
+                    }
+
+                    // Try sln-mode pattern first (richer info: per-project counts)
+                    var slnMatch = BuildDoneSlnRegex.Match(newText);
+                    if (slnMatch.Success)
+                    {
+                        int succeededCount = ParseInt(slnMatch.Groups["ok_en"].Value) + ParseInt(slnMatch.Groups["ok_jp"].Value);
+                        int failedCount = ParseInt(slnMatch.Groups["ng_en"].Value) + ParseInt(slnMatch.Groups["ng_jp"].Value);
+                        var ok = failedCount == 0;
+                        return McpToolResult.Success(new
+                        {
+                            success = ok,
+                            succeededProjects = succeededCount,
+                            failedProjects = failedCount,
+                            message = ok
+                                ? $"{actionName} succeeded ({succeededCount} succeeded, {failedCount} failed)"
+                                : $"{actionName} failed ({succeededCount} succeeded, {failedCount} failed)"
+                        });
+                    }
+
+                    // Fall back to CMake folder-mode pattern (single succeeded/failed line)
+                    var folderMatch = BuildDoneFolderRegex.Match(newText);
+                    if (folderMatch.Success)
+                    {
+                        var resultJp = folderMatch.Groups["result_jp"].Value;
+                        var resultEn = folderMatch.Groups["result_en"].Value;
+                        var ok = resultJp == "成功"
+                            || string.Equals(resultEn, "succeeded", StringComparison.OrdinalIgnoreCase);
+                        return McpToolResult.Success(new
+                        {
+                            success = ok,
+                            succeededProjects = ok ? 1 : 0,
+                            failedProjects = ok ? 0 : 1,
+                            message = ok
+                                ? $"{actionName} succeeded (CMake folder mode)"
+                                : $"{actionName} failed (CMake folder mode)"
+                        });
+                    }
+
+                    if (DateTime.UtcNow > deadline)
+                        return McpToolResult.Error($"{actionName} timed out after 30 minutes (no completion marker in Build output pane)");
+
+                    await Task.Delay(500);
+                }
+            }
+            finally
+            {
+                buildLock?.Dispose();
             }
         }
 
@@ -438,10 +454,12 @@ namespace VsMcp.Extension.Tools
                     return McpToolResult.Error($"Project '{name}' not found");
 
                 var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForBuild(vsHwnd);
-                sb.BuildProject(builtName, uniqueName, true);
-
-                var succeeded = sb.LastBuildInfo == 0;
+                bool succeeded;
+                using (FocusGuard.AcquireBuildLock(vsHwnd))
+                {
+                    sb.BuildProject(builtName, uniqueName, true);
+                    succeeded = sb.LastBuildInfo == 0;
+                }
                 return McpToolResult.Success(new
                 {
                     success = succeeded,
@@ -476,8 +494,10 @@ namespace VsMcp.Extension.Tools
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
                 var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForBuild(vsHwnd);
-                sb.Clean(true);
+                using (FocusGuard.AcquireBuildLock(vsHwnd))
+                {
+                    sb.Clean(true);
+                }
 
                 return McpToolResult.Success("Solution cleaned successfully");
             });
@@ -515,10 +535,12 @@ namespace VsMcp.Extension.Tools
                 catch { }
 
                 var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
-                FocusGuard.PreserveForegroundForBuild(vsHwnd);
-                sb.Build(true);
-
-                var succeeded = sb.LastBuildInfo == 0;
+                bool succeeded;
+                using (FocusGuard.AcquireBuildLock(vsHwnd))
+                {
+                    sb.Build(true);
+                    succeeded = sb.LastBuildInfo == 0;
+                }
                 return McpToolResult.Success(new
                 {
                     success = succeeded,
