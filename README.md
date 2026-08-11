@@ -412,12 +412,14 @@ while the developer keeps a fullscreen application (e.g. a game) running
 on another — no focus theft, no window flicker, no context switch.
 
 Paired with **[jidodebugger](https://jidodebugger.dhq-boiler.dev/)**
-(a companion MCP server that injects a WPF bridge into the debuggee and
-exposes `wpf_bridge_inject` / `wpf_invoke_command` / `wpf_wait_for` for
-direct ViewModel-level drive-and-assert), the loop becomes: vs-mcp
-launches the debuggee under the focus guard, jidodebugger drives its
-UI over the same MCP session, and neither side has to touch the
-foreground.
+— an upstream MCP server that sits above vs-mcp's desktop-app UIA
+layer and supersedes it with WPF-native automation (bridge injection
+into the debuggee, direct `ICommand` invocation, and
+ViewModel-property waits via `wpf_bridge_inject` /
+`wpf_invoke_command` / `wpf_wait_for`, on top of the raw UIA tools
+vs-mcp already provides) — the loop becomes: vs-mcp launches the
+debuggee under the focus guard, jidodebugger drives its UI over the
+same MCP session, and neither side has to touch the foreground.
 
 Recorded end-to-end run against a WPF debuggee (6 tool calls, zero
 human interventions, zero foreground steals):
