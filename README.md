@@ -8,11 +8,11 @@
 
 ## Features
 
-VS MCP Server exposes **111 tools** across the following categories:
+VS MCP Server exposes **113 tools** across the following categories:
 
 | Category | Tools | Description |
 |----------|------:|-------------|
-| General | 3 | Execute VS commands, get IDE status, view tool help |
+| General | 5 | Execute VS commands, get IDE status, view tool help, toggle focus guard |
 | Solution & Project | 5 | Open/close solutions, list/inspect projects |
 | Build | 6 | Build solution/project, clean, rebuild, get build errors, switch configuration |
 | Editor | 7 | Open/close/read/write/edit files, find in files |
@@ -38,6 +38,8 @@ VS MCP Server exposes **111 tools** across the following categories:
 | `execute_command` | Execute a Visual Studio command by name |
 | `get_status` | Get the current Visual Studio status including solution state, active document, and debugger mode |
 | `get_help` | Get a categorized list of all available vs-mcp tools with descriptions |
+| `focus_guard_get` | Get whether the focus guard is currently on |
+| `focus_guard_set` | Turn the focus guard on or off — when on, MCP-driven builds, output writes, and debug launches do not steal foreground focus from the currently focused application, and VS is kept minimized across `debug_start` if it was already minimized |
 
 #### Solution
 
@@ -401,6 +403,40 @@ You can also specify individual category names (e.g. `--tools General,Build,Debu
 
 - If VS is restarted, StdioProxy automatically reconnects on the next `tools/call` request.
 - Stale port files from crashed or closed VS instances are cleaned up automatically during discovery.
+
+## Showcase: hands-off AI-driven dogfood
+
+With `focus_guard_set enabled=true`, an AI agent can drive a full
+build → debug → UI verification cycle in Visual Studio on one monitor
+while the developer keeps a fullscreen application (e.g. a game) running
+on another — no focus theft, no window flicker, no context switch.
+
+Recorded end-to-end run against a WPF debuggee (6 tool calls, zero
+human interventions, zero foreground steals):
+
+| # | Tool | Result | What the guard did |
+|---|------|--------|--------------------|
+| 1 | `debug_start` (vs-mcp) | Debugging started | VS restore *and* debuggee launch both stayed background — the user's foreground app was never activated |
+| 2 | `wpf_bridge_inject` (external UI bridge) | payload attached | — |
+| 3 | `wpf_invoke_command` LoadCommand | fired=true, awaitedAsync=true | — |
+| 4 | `wpf_wait_for` viewModel appears | matchCount=5 (~3.9 s) | — |
+| 5 | `wpf_invoke_command` OpenMemberByKeyCommand | fired=true, awaitedAsync=true | — |
+| 6 | `wpf_wait_for` propertyNotNull | matched | — |
+
+How it works under the hood, when the guard is on:
+
+1. `LockSetForegroundWindow` denies foreign `SetForegroundWindow` calls
+   during the debug-start window.
+2. `SPI_SETFOREGROUNDLOCKTIMEOUT` is temporarily raised so the launched
+   debuggee's own activation attempts are demoted to a taskbar flash.
+3. If VS is minimized at the moment `debug_start` /
+   `debug_start_without_debugging` / `debug_restart` is invoked, it is
+   re-minimized (`SW_SHOWMINNOACTIVE`) whenever it tries to auto-restore
+   during the lock window.
+
+The setting is off by default, so opt-in via `focus_guard_set` before an
+autonomous session and turn it off again when you want normal VS focus
+behavior back.
 
 ## Bundled Claude Code Skills
 
