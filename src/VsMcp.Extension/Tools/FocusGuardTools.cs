@@ -21,14 +21,14 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_get",
-                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes and debug starts avoid stealing foreground focus from the currently focused application, and Visual Studio is kept minimized across debug_start if it was already minimized when the call was issued.",
+                    "Get whether the focus guard is currently on. When on, MCP-driven builds, output writes, and debug lifecycle transitions (start / start_without_debugging / restart / stop) avoid stealing foreground focus from the currently focused application, and Visual Studio is kept minimized across those transitions if it was already minimized when the call was issued.",
                     SchemaBuilder.Empty()),
                 args => GetAsync());
 
             registry.Register(
                 new McpToolDefinition(
                     "focus_guard_set",
-                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) debug_start / debug_start_without_debugging / debug_restart briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so the launched debuggee cannot steal focus from the currently focused application (e.g. a game running fullscreen); (3) if Visual Studio was minimized at the moment debug_start* was invoked, it is re-minimized whenever it tries to auto-restore during the lock window, so the user's foreground app is never visually interrupted. Off by default.",
+                    "Turn the focus guard on or off. When on: (1) MCP-driven builds and output writes skip pane.Activate() calls; (2) debug_start / debug_start_without_debugging / debug_restart / debug_stop briefly lock foreground-window changes (LockSetForegroundWindow) and temporarily raise SPI_SETFOREGROUNDLOCKTIMEOUT so neither the launched debuggee nor Visual Studio's own stop-debugging UI transitions can steal focus from the currently focused application (e.g. a game running fullscreen); (3) if Visual Studio was minimized at the moment any of those debug_* commands was invoked, it is re-minimized whenever it tries to auto-restore during the lock window, so the user's foreground app is never visually interrupted. Off by default.",
                     SchemaBuilder.Create()
                         .AddBoolean("enabled", "true to enable focus guard, false to disable it", required: true)
                         .Build()),

@@ -175,6 +175,11 @@ namespace VsMcp.Extension.Tools
                 if (dte.Debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
                     return McpToolResult.Error("Debugger is not running");
 
+                // Prevent VS from stealing foreground when it restores from a
+                // minimized state to run its stop-debugging UI transitions.
+                // No-op if the guard is off.
+                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Debugger.Stop(false);
                 return McpToolResult.Success("Debugging stopped");
             });
@@ -191,6 +196,11 @@ namespace VsMcp.Extension.Tools
                 if (dte.Debugger.CurrentMode == dbgDebugMode.dbgDesignMode)
                     return false;
 
+                // Guard the stop half of restart too — otherwise VS can steal
+                // foreground here even though the subsequent start half is
+                // already protected.
+                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Debugger.Stop(false);
                 return true;
             });
