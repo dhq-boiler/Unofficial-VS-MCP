@@ -121,6 +121,9 @@ namespace VsMcp.Extension.Tools
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
+                // Prevent the process launched by the debugger from stealing foreground
+                // focus. When focus guard is off, this is a no-op.
+                FocusGuard.PreserveForegroundForDebug();
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging started");
             });
@@ -133,6 +136,7 @@ namespace VsMcp.Extension.Tools
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
+                FocusGuard.PreserveForegroundForDebug();
                 dte.ExecuteCommand("Debug.StartWithoutDebugging");
                 return McpToolResult.Success("Started without debugging");
             });
@@ -190,6 +194,7 @@ namespace VsMcp.Extension.Tools
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
+                FocusGuard.PreserveForegroundForDebug();
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging restarted");
             });
@@ -496,7 +501,7 @@ namespace VsMcp.Extension.Tools
                     if (pane == null)
                         pane = outputWindow.OutputWindowPanes.Add("VsMcp");
                     pane.OutputString(resultText + Environment.NewLine);
-                    pane.Activate();
+                    if (!FocusGuard.Enabled) pane.Activate();
                 }
                 catch { /* best-effort */ }
 

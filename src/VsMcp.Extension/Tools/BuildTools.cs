@@ -80,6 +80,10 @@ namespace VsMcp.Extension.Tools
 
         private static void ShowOutputWindow(DTE2 dte)
         {
+            // When focus guard is on, do not activate the Output tool window / Build pane:
+            // the goal is to avoid interrupting whatever application currently has focus.
+            if (FocusGuard.Enabled) return;
+
             try
             {
                 var outputWindow = dte.ToolWindows.OutputWindow;

@@ -150,6 +150,7 @@ namespace VsMcp.Extension
         private void RegisterTools()
         {
             GeneralTools.Register(_toolRegistry, _serviceAccessor);
+            FocusGuardTools.Register(_toolRegistry, _serviceAccessor);
             SolutionTools.Register(_toolRegistry, _serviceAccessor);
             ProjectTools.Register(_toolRegistry, _serviceAccessor);
             BuildTools.Register(_toolRegistry, _serviceAccessor);

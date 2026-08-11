@@ -122,7 +122,7 @@ namespace VsMcp.Extension.Tools
                 }
 
                 pane.OutputString(text + Environment.NewLine);
-                pane.Activate();
+                if (!FocusGuard.Enabled) pane.Activate();
 
                 return McpToolResult.Success($"Written to output pane '{paneName}'");
             });

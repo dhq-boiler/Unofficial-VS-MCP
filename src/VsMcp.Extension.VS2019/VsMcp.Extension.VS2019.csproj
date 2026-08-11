@@ -79,6 +79,7 @@
     <Compile Include="..\VsMcp.Extension\Services\IBrowserConnection.cs" Link="Services\IBrowserConnection.cs" />
     <Compile Include="..\VsMcp.Extension\Services\CdpConnection.cs" Link="Services\CdpConnection.cs" />
     <Compile Include="..\VsMcp.Extension\Services\FirefoxRdpConnection.cs" Link="Services\FirefoxRdpConnection.cs" />
+    <Compile Include="..\VsMcp.Extension\Services\FocusGuard.cs" Link="Services\FocusGuard.cs" />
     <Compile Include="..\VsMcp.Extension\Tools\*.cs" Link="Tools\%(Filename)%(Extension)" />
   </ItemGroup>
 

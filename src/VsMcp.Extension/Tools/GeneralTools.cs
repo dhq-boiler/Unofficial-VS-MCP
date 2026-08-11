@@ -20,6 +20,8 @@ namespace VsMcp.Extension.Tools
             { "execute_command", "General" },
             { "get_status", "General" },
             { "get_help", "General" },
+            { "focus_guard_get", "General" },
+            { "focus_guard_set", "General" },
             // Solution
             { "solution_open", "Solution" },
             { "solution_close", "Solution" },
