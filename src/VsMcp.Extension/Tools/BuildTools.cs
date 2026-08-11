@@ -157,6 +157,10 @@ namespace VsMcp.Extension.Tools
                 }
                 catch { }
 
+                // Block VS from auto-activating the Error List (and stealing focus)
+                // when the build finishes with compile errors. No-op when guard is off.
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForBuild(vsHwnd);
                 sb.Build(true);
 
                 var succeeded = sb.LastBuildInfo == 0;
@@ -257,6 +261,8 @@ namespace VsMcp.Extension.Tools
                     var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                         .Run(() => accessor.GetDteAsync());
                     WriteToBuildPane(dte, marker + "\n");
+                    var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                    FocusGuard.PreserveForegroundForBuild(vsHwnd);
                     dte.ExecuteCommand(commandName);
                 });
             }
@@ -431,6 +437,8 @@ namespace VsMcp.Extension.Tools
                 if (uniqueName == null)
                     return McpToolResult.Error($"Project '{name}' not found");
 
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForBuild(vsHwnd);
                 sb.BuildProject(builtName, uniqueName, true);
 
                 var succeeded = sb.LastBuildInfo == 0;
@@ -467,6 +475,8 @@ namespace VsMcp.Extension.Tools
                     .Run(() => accessor.GetDteAsync());
 
                 var sb = (SolutionBuild2)dte.Solution.SolutionBuild;
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForBuild(vsHwnd);
                 sb.Clean(true);
 
                 return McpToolResult.Success("Solution cleaned successfully");
@@ -504,6 +514,8 @@ namespace VsMcp.Extension.Tools
                 }
                 catch { }
 
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
+                FocusGuard.PreserveForegroundForBuild(vsHwnd);
                 sb.Build(true);
 
                 var succeeded = sb.LastBuildInfo == 0;

@@ -27,6 +27,12 @@ namespace VsMcp.Extension.Services
         // (long enough for the debuggee to finish its initial ShowWindow attempts).
         public static TimeSpan DefaultDebugLockDuration { get; set; } = TimeSpan.FromSeconds(4);
 
+        // Default: cover the length of a typical MCP-driven build so that VS
+        // cannot auto-activate the Error List pane when a compilation error is
+        // reported. Longer than the debug default because build_solution can
+        // synchronously take tens of seconds.
+        public static TimeSpan DefaultBuildLockDuration { get; set; } = TimeSpan.FromSeconds(30);
+
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
@@ -99,6 +105,22 @@ namespace VsMcp.Extension.Services
         public static IDisposable PreserveForegroundForDebug(IntPtr vsMainHwnd)
         {
             return PreserveForeground(DefaultDebugLockDuration, vsMainHwnd);
+        }
+
+        /// <summary>
+        /// Preserve the current foreground for the duration of an MCP-driven build.
+        /// Blocks VS from auto-activating the Error List pane when the build ends
+        /// with compile errors, and keeps VS minimized (if it already was) across
+        /// the build. No-op when the guard is off.
+        /// </summary>
+        public static IDisposable PreserveForegroundForBuild()
+        {
+            return PreserveForegroundForBuild(IntPtr.Zero);
+        }
+
+        public static IDisposable PreserveForegroundForBuild(IntPtr vsMainHwnd)
+        {
+            return PreserveForeground(DefaultBuildLockDuration, vsMainHwnd);
         }
 
         public static IDisposable PreserveForeground(TimeSpan lockDuration)

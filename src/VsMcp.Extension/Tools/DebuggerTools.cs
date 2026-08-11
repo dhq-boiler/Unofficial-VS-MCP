@@ -114,26 +114,6 @@ namespace VsMcp.Extension.Tools
                 args => DebugEvaluateAsync(accessor, args));
         }
 
-        private static IntPtr TryGetVsMainWindowHandle(DTE2 dte)
-        {
-            try
-            {
-                var mainWindow = dte?.MainWindow;
-                if (mainWindow == null) return IntPtr.Zero;
-                // DTE.Window.HWnd was long in older SDKs and is IntPtr? in newer ones.
-                // Round-trip through Convert to accept either shape via runtime binding.
-                object raw = mainWindow.HWnd;
-                if (raw == null) return IntPtr.Zero;
-                if (raw is IntPtr ip) return ip;
-                long asLong = Convert.ToInt64(raw);
-                return asLong == 0 ? IntPtr.Zero : new IntPtr(asLong);
-            }
-            catch
-            {
-                return IntPtr.Zero;
-            }
-        }
-
         private static async Task<McpToolResult> DebugStartAsync(VsServiceAccessor accessor)
         {
             return await accessor.RunOnUIThreadAsync(() =>
@@ -144,7 +124,7 @@ namespace VsMcp.Extension.Tools
                 // Prevent the process launched by the debugger from stealing foreground
                 // focus, and keep VS minimized if it already was. No-op when the guard
                 // is off.
-                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging started");
@@ -158,7 +138,7 @@ namespace VsMcp.Extension.Tools
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
 
-                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.ExecuteCommand("Debug.StartWithoutDebugging");
                 return McpToolResult.Success("Started without debugging");
@@ -178,7 +158,7 @@ namespace VsMcp.Extension.Tools
                 // Prevent VS from stealing foreground when it restores from a
                 // minimized state to run its stop-debugging UI transitions.
                 // No-op if the guard is off.
-                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Debugger.Stop(false);
                 return McpToolResult.Success("Debugging stopped");
@@ -199,7 +179,7 @@ namespace VsMcp.Extension.Tools
                 // Guard the stop half of restart too — otherwise VS can steal
                 // foreground here even though the subsequent start half is
                 // already protected.
-                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Debugger.Stop(false);
                 return true;
@@ -227,7 +207,7 @@ namespace VsMcp.Extension.Tools
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
                     .Run(() => accessor.GetDteAsync());
-                var vsHwnd = TryGetVsMainWindowHandle(dte);
+                var vsHwnd = VsWindowHelper.TryGetMainWindowHandle(dte);
                 FocusGuard.PreserveForegroundForDebug(vsHwnd);
                 dte.Solution.SolutionBuild.Debug();
                 return McpToolResult.Success("Debugging restarted");
