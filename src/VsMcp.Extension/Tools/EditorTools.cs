@@ -79,10 +79,10 @@ namespace VsMcp.Extension.Tools
             registry.Register(
                 new McpToolDefinition(
                     "find_in_files",
-                    "Text search across files in the solution directory (literal text or regex). Searches the file system directly (fast, does not block VS UI). Skips bin/obj/.vs/packages/node_modules. Not symbol-aware — for finding references of a symbol use code_find_references; for navigating to a definition use code_goto_definition.",
+                    "Text search across the solution directory, project directories, and linked project files (literal text or regex). Searches the file system directly (fast, does not block VS UI). Skips bin/obj/.vs/packages/node_modules. Not symbol-aware — for finding references of a symbol use code_find_references; for navigating to a definition use code_goto_definition.",
                     SchemaBuilder.Create()
                         .AddString("query", "The search text or pattern", required: true)
-                        .AddString("filePattern", "File pattern to filter (e.g. '*.cs', '*.xaml')")
+                        .AddString("filePattern", "File patterns separated by semicolons (e.g. '*.cs;*.xaml'); default: '*.*'")
                         .AddBoolean("matchCase", "Whether to match case (default: false)")
                         .AddBoolean("useRegex", "Whether to use regular expressions (default: false)")
                         .AddInteger("maxResults", "Maximum number of results to return (default: 100)")
@@ -328,8 +328,9 @@ namespace VsMcp.Extension.Tools
             var useRegex = args.Value<bool?>("useRegex") ?? false;
             var maxResults = args.Value<int?>("maxResults") ?? 100;
 
-            // Get solution directory from UI thread
             string solutionDir = null;
+            var searchDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var projectFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             await accessor.RunOnUIThreadAsync(() =>
             {
                 var dte = Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory
@@ -338,6 +339,9 @@ namespace VsMcp.Extension.Tools
                 if (dte.Solution != null && !string.IsNullOrEmpty(dte.Solution.FullName))
                 {
                     solutionDir = Path.GetDirectoryName(dte.Solution.FullName);
+                    searchDirectories.Add(solutionDir);
+                    foreach (Project project in dte.Solution.Projects)
+                        CollectSearchPaths(project, searchDirectories, projectFiles);
                 }
             });
 
@@ -360,16 +364,8 @@ namespace VsMcp.Extension.Tools
                     regex = new System.Text.RegularExpressions.Regex(query, options);
                 }
 
-                foreach (var file in Directory.EnumerateFiles(solutionDir, filePattern, SearchOption.AllDirectories))
+                foreach (var file in SearchFileEnumerator.Enumerate(searchDirectories, projectFiles, filePattern))
                 {
-                    // Skip common non-source directories
-                    if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
-                        file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") ||
-                        file.Contains($"{Path.DirectorySeparatorChar}.vs{Path.DirectorySeparatorChar}") ||
-                        file.Contains($"{Path.DirectorySeparatorChar}packages{Path.DirectorySeparatorChar}") ||
-                        file.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}"))
-                        continue;
-
                     filesSearched++;
 
                     try
@@ -385,7 +381,9 @@ namespace VsMcp.Extension.Tools
                             {
                                 results.Add(new
                                 {
-                                    file = file.Substring(solutionDir.Length + 1),
+                                    file = file.StartsWith(solutionDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                                        ? file.Substring(solutionDir.TrimEnd(Path.DirectorySeparatorChar).Length + 1)
+                                        : file,
                                     line = i + 1,
                                     text = lines[i].Trim()
                                 });
@@ -411,6 +409,41 @@ namespace VsMcp.Extension.Tools
                     results
                 });
             });
+        }
+
+        private static void CollectSearchPaths(Project project, ISet<string> directories, ISet<string> files)
+        {
+            try
+            {
+                if (project.Kind != "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}" &&
+                    !string.IsNullOrEmpty(project.FullName))
+                    directories.Add(Path.GetDirectoryName(project.FullName));
+                CollectSearchPaths(project.ProjectItems, directories, files);
+            }
+            catch (System.Runtime.InteropServices.COMException) { }
+        }
+
+        private static void CollectSearchPaths(ProjectItems items, ISet<string> directories, ISet<string> files)
+        {
+            if (items == null)
+                return;
+
+            foreach (ProjectItem item in items)
+            {
+                try
+                {
+                    if (item.SubProject != null)
+                        CollectSearchPaths(item.SubProject, directories, files);
+                    for (short index = 1; index <= item.FileCount; index++)
+                    {
+                        var path = item.FileNames[index];
+                        if (File.Exists(path))
+                            files.Add(path);
+                    }
+                    CollectSearchPaths(item.ProjectItems, directories, files);
+                }
+                catch (System.Runtime.InteropServices.COMException) { }
+            }
         }
     }
 }

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net48</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/VsMcp.Extension/Tools/SearchFileEnumerator.cs" Link="SearchFileEnumerator.cs" />
+  </ItemGroup>
+</Project>

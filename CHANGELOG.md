@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.4] - 2026-10-22
+
+### Fixed
+- **File search with multiple filters** — `find_in_files` now supports semicolon-separated patterns such as `*.h;*.cpp;*.cs` instead of returning zero searched files.
+- **File search outside the solution directory** — searches project directories and linked project files, including sources outside a `build` directory containing the solution. Overlapping paths are searched once, and generated directories remain excluded. Fixes [#7](https://github.com/dhq-boiler/Unofficial-VS-MCP/issues/7).
+
 ## [0.9.0] - 2026-05-13
 
 ### Improved
